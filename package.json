@@ -1,0 +1,32 @@
+{
+  "name": "yuNote",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "test": "jest"
+  },
+  "dependencies": {
+    "@op-engineering/op-sqlite": "^18.2.0",
+    "react": "19.2.3",
+    "react-native": "0.86.0",
+    "react-native-get-random-values": "^1.11.0",
+    "uuid": "^11.0.5",
+    "zustand": "^5.0.14"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@babel/preset-env": "^7.25.3",
+    "@babel/runtime": "^7.25.0",
+    "@react-native/babel-preset": "0.86.0",
+    "@react-native/jest-preset": "0.86.0",
+    "@react-native/typescript-config": "0.86.0",
+    "@types/jest": "^29.5.13",
+    "@types/uuid": "^10.0.0",
+    "better-sqlite3": "^12.5.0",
+    "jest": "^29.6.3",
+    "typescript": "^5.8.3"
+  },
+  "engines": {
+    "node": ">= 22.11.0"
+  }
+}
