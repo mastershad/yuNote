@@ -22,8 +22,11 @@ describe('lists repository', () => {
   });
 
   afterEach(() => {
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      db?.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('creates and lists a list', async () => {

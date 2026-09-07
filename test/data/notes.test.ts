@@ -15,8 +15,11 @@ describe('notes repository', () => {
   });
 
   afterEach(() => {
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      db?.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('creates a note with no class by default', async () => {
