@@ -10,7 +10,7 @@ interface ClassesState {
 }
 
 export function createClassesStore(db: OpSqliteDb): UseBoundStore<StoreApi<ClassesState>> {
-  return create<ClassesState>((set, get) => ({
+  return create<ClassesState>((set) => ({
     classes: [],
     async loadClasses() {
       const classes = await listClasses(db);
@@ -18,12 +18,15 @@ export function createClassesStore(db: OpSqliteDb): UseBoundStore<StoreApi<Class
     },
     async createClass(name) {
       const cls = await repoCreateClass(db, name);
-      set({ classes: [...get().classes, cls] });
+      // Reload from the repository rather than appending locally, so the
+      // slice reflects listClasses' actual order (name ASC) instead of
+      // insertion order.
+      set({ classes: await listClasses(db) });
       return cls;
     },
     async deleteClass(id) {
       await repoDeleteClass(db, id);
-      set({ classes: get().classes.filter((c) => c.id !== id) });
+      set({ classes: await listClasses(db) });
     },
   }));
 }

@@ -34,13 +34,15 @@ export function createListsStore(db: OpSqliteDb): UseBoundStore<StoreApi<ListsSt
     },
     async createList(title) {
       const list = await repoCreateList(db, title);
-      set({ lists: [list, ...get().lists] });
+      // Reload from the repository rather than prepending locally, so the
+      // slice reflects listLists' actual order (updated_at DESC).
+      set({ lists: await listLists(db) });
       return list;
     },
     async deleteList(id) {
       await repoDeleteList(db, id);
       const { [id]: _removed, ...rest } = get().itemsByListId;
-      set({ lists: get().lists.filter((l) => l.id !== id), itemsByListId: rest });
+      set({ lists: await listLists(db), itemsByListId: rest });
     },
     async loadItems(listId) {
       const items = await listItemsForList(db, listId);
@@ -48,25 +50,21 @@ export function createListsStore(db: OpSqliteDb): UseBoundStore<StoreApi<ListsSt
     },
     async addItem(listId, text) {
       const item = await addListItem(db, listId, text);
-      const existing = get().itemsByListId[listId] ?? [];
-      set({ itemsByListId: { ...get().itemsByListId, [listId]: [...existing, item] } });
+      const items = await listItemsForList(db, listId);
+      set({ itemsByListId: { ...get().itemsByListId, [listId]: items } });
       return item;
     },
     async toggleItem(listId, itemId) {
       const existing = get().itemsByListId[listId] ?? [];
       const current = existing.find((i) => i.id === itemId);
-      const updated = await updateListItem(db, itemId, { checked: !current?.checked });
-      set({
-        itemsByListId: {
-          ...get().itemsByListId,
-          [listId]: existing.map((i) => (i.id === itemId ? updated : i)),
-        },
-      });
+      await updateListItem(db, itemId, { checked: !current?.checked });
+      const items = await listItemsForList(db, listId);
+      set({ itemsByListId: { ...get().itemsByListId, [listId]: items } });
     },
     async removeItem(listId, itemId) {
       await deleteListItem(db, itemId);
-      const existing = get().itemsByListId[listId] ?? [];
-      set({ itemsByListId: { ...get().itemsByListId, [listId]: existing.filter((i) => i.id !== itemId) } });
+      const items = await listItemsForList(db, listId);
+      set({ itemsByListId: { ...get().itemsByListId, [listId]: items } });
     },
   }));
 }

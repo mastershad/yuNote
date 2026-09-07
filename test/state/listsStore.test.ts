@@ -14,8 +14,11 @@ describe('lists store', () => {
   });
 
   afterEach(() => {
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      db?.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('loadLists populates the lists slice', async () => {
@@ -54,5 +57,21 @@ describe('lists store', () => {
     await store.getState().removeItem(list.id, item.id);
 
     expect(store.getState().itemsByListId[list.id]).toEqual([]);
+  });
+
+  it('deleteList reloads the lists slice in repository order (updated_at DESC), not local splice/filter order', async () => {
+    const store = createListsStore(db);
+    const listA = await store.getState().createList('Список A');
+    const listB = await store.getState().createList('Список B');
+    const trash = await store.getState().createList('Мусор');
+
+    // Directly simulate list A having been touched more recently than B --
+    // a naive filter of the pre-mutation local array could never reorder
+    // A ahead of B like this; only a real reload from the repository can.
+    await db.execute('UPDATE lists SET updated_at = ? WHERE id = ?', ['2099-01-01T00:00:00.000Z', listA.id]);
+
+    await store.getState().deleteList(trash.id);
+
+    expect(store.getState().lists.map((l) => l.id)).toEqual([listA.id, listB.id]);
   });
 });

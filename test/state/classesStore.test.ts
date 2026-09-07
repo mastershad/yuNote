@@ -14,8 +14,11 @@ describe('classes store', () => {
   });
 
   afterEach(() => {
-    db.close();
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      db?.close();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('createClass updates the slice without a separate reload', async () => {
@@ -33,5 +36,15 @@ describe('classes store', () => {
     await store.getState().deleteClass(cls.id);
 
     expect(store.getState().classes).toEqual([]);
+  });
+
+  it('createClass reloads from the repository, so the slice reflects name-sorted order rather than insertion/append order', async () => {
+    const store = createClassesStore(db);
+    await store.getState().createClass('Работа');
+
+    // "Быт" sorts before "Работа" -- an append would put it last.
+    await store.getState().createClass('Быт');
+
+    expect(store.getState().classes.map((c) => c.name)).toEqual(['Быт', 'Работа']);
   });
 });
