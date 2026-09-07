@@ -47,7 +47,13 @@ describe('openMigratedDatabase', () => {
 
   it('is idempotent -- opening an already-migrated database does not error or duplicate tables', async () => {
     const firstOpen = await openMigratedDatabase({ name: 'test.sqlite', location: dir });
-    firstOpen.close();
+    try {
+      // Nothing else to run here -- opening it once is the whole point of
+      // "first open" -- but this still needs closing failure-safe, same as
+      // every other db handle in this file.
+    } finally {
+      firstOpen.close();
+    }
 
     const secondOpen = await openMigratedDatabase({ name: 'test.sqlite', location: dir });
 
