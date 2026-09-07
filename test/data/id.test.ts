@@ -13,6 +13,7 @@ describe('generateId', () => {
 
 describe('nowIso', () => {
   it('returns a valid ISO 8601 timestamp', () => {
-    expect(new Date(nowIso()).toISOString()).toBe(nowIso());
+    const timestamp = nowIso();
+    expect(new Date(timestamp).toISOString()).toBe(timestamp);
   });
 });
