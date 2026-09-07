@@ -1,17 +1,39 @@
 import { open } from '@op-engineering/op-sqlite';
 
-export interface OpSqliteDb {
+// The subset of the db surface a migration body (or anything running inside
+// a transaction callback) needs -- deliberately excludes `close`/`transaction`
+// so a migration can't accidentally nest a transaction or close the handle
+// it was handed.
+export interface OpSqliteExecutor {
   execute(sql: string, params?: unknown[]): Promise<{ rows?: Record<string, unknown>[] }>;
+}
+
+export interface OpSqliteDb extends OpSqliteExecutor {
+  // Wraps `fn` in a real BEGIN/COMMIT/ROLLBACK: op-sqlite's native binding and
+  // its Node/Jest façade (node/dist/database.js, backed by better-sqlite3)
+  // both implement this with the same contract -- if `fn` throws, everything
+  // it did via `tx.execute` is rolled back and the throw propagates; if `fn`
+  // resolves, the transaction commits automatically (no explicit tx.commit()
+  // needed). See node_modules/@op-engineering/op-sqlite/lib/module/functions.js
+  // and node_modules/@op-engineering/op-sqlite/node/dist/database.js.
+  transaction(fn: (tx: OpSqliteExecutor) => Promise<void>): Promise<void>;
   close(): void;
 }
 
-export function openDatabase(options: { name: string; location: string }): OpSqliteDb {
-  return open(options);
+export async function openDatabase(options: { name: string; location: string }): Promise<OpSqliteDb> {
+  const db = open(options) as unknown as OpSqliteDb;
+  // Off by default both in SQLite's own compile-time default and in the real
+  // op-sqlite native build on-device; only the Node/Jest façade (better-sqlite3)
+  // defaults it ON. Without this, notes.class_id -> classes(id) and
+  // list_items.list_id -> lists(id) would be silently unenforced on a real
+  // device while appearing enforced under every test.
+  await db.execute('PRAGMA foreign_keys = ON');
+  return db;
 }
 
 interface Migration {
   version: number;
-  up: (db: OpSqliteDb) => Promise<void>;
+  up: (db: OpSqliteExecutor) => Promise<void>;
 }
 
 // classes deliberately has no synced_at column -- this is the schema-level
@@ -66,7 +88,7 @@ const migrations: Migration[] = [
 ];
 
 export async function openMigratedDatabase(options: { name: string; location: string }): Promise<OpSqliteDb> {
-  const db = openDatabase(options);
+  const db = await openDatabase(options);
 
   // Read via the pragma_user_version() table-valued function rather than the
   // bare `PRAGMA user_version` statement form: op-sqlite's Node/Jest façade
@@ -81,8 +103,18 @@ export async function openMigratedDatabase(options: { name: string; location: st
 
   for (const migration of migrations) {
     if (migration.version > currentVersion) {
-      await migration.up(db);
-      await db.execute(`PRAGMA user_version = ${migration.version}`);
+      // Migration DDL and the PRAGMA user_version write both participate in
+      // this transaction, so a throw anywhere in `migration.up` rolls back
+      // every statement it issued *and* leaves user_version untouched --
+      // the file is left exactly as it was before this attempt, safe to
+      // retry on next launch. Without this, a process death between the
+      // tables being created and the version bump would leave tables
+      // present but user_version stale, and every later open would re-run
+      // `CREATE TABLE ...` and fail forever with "table already exists".
+      await db.transaction(async (tx) => {
+        await migration.up(tx);
+        await tx.execute(`PRAGMA user_version = ${migration.version}`);
+      });
     }
   }
 
