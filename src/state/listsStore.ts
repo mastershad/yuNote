@@ -1,0 +1,72 @@
+import { create, type StoreApi, type UseBoundStore } from 'zustand';
+import type { OpSqliteDb } from '../db/connection';
+import {
+  createList as repoCreateList,
+  deleteList as repoDeleteList,
+  listLists,
+  addListItem,
+  updateListItem,
+  deleteListItem,
+  listItemsForList,
+  type List,
+  type ListItem,
+} from '../data/lists';
+
+interface ListsState {
+  lists: List[];
+  itemsByListId: Record<string, ListItem[]>;
+  loadLists(): Promise<void>;
+  createList(title: string): Promise<List>;
+  deleteList(id: string): Promise<void>;
+  loadItems(listId: string): Promise<void>;
+  addItem(listId: string, text: string): Promise<ListItem>;
+  toggleItem(listId: string, itemId: string): Promise<void>;
+  removeItem(listId: string, itemId: string): Promise<void>;
+}
+
+export function createListsStore(db: OpSqliteDb): UseBoundStore<StoreApi<ListsState>> {
+  return create<ListsState>((set, get) => ({
+    lists: [],
+    itemsByListId: {},
+    async loadLists() {
+      const lists = await listLists(db);
+      set({ lists });
+    },
+    async createList(title) {
+      const list = await repoCreateList(db, title);
+      set({ lists: [list, ...get().lists] });
+      return list;
+    },
+    async deleteList(id) {
+      await repoDeleteList(db, id);
+      const { [id]: _removed, ...rest } = get().itemsByListId;
+      set({ lists: get().lists.filter((l) => l.id !== id), itemsByListId: rest });
+    },
+    async loadItems(listId) {
+      const items = await listItemsForList(db, listId);
+      set({ itemsByListId: { ...get().itemsByListId, [listId]: items } });
+    },
+    async addItem(listId, text) {
+      const item = await addListItem(db, listId, text);
+      const existing = get().itemsByListId[listId] ?? [];
+      set({ itemsByListId: { ...get().itemsByListId, [listId]: [...existing, item] } });
+      return item;
+    },
+    async toggleItem(listId, itemId) {
+      const existing = get().itemsByListId[listId] ?? [];
+      const current = existing.find((i) => i.id === itemId);
+      const updated = await updateListItem(db, itemId, { checked: !current?.checked });
+      set({
+        itemsByListId: {
+          ...get().itemsByListId,
+          [listId]: existing.map((i) => (i.id === itemId ? updated : i)),
+        },
+      });
+    },
+    async removeItem(listId, itemId) {
+      await deleteListItem(db, itemId);
+      const existing = get().itemsByListId[listId] ?? [];
+      set({ itemsByListId: { ...get().itemsByListId, [listId]: existing.filter((i) => i.id !== itemId) } });
+    },
+  }));
+}
