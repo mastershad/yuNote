@@ -94,6 +94,10 @@ export async function updateNote(
 }
 
 export async function deleteNote(db: OpSqliteDb, id: string): Promise<void> {
+  const { rows } = await db.execute('SELECT id FROM notes WHERE id = ?', [id]);
+  if (!rows || rows.length === 0) {
+    throw new Error(`Note not found: ${id}`);
+  }
   await db.transaction(async (tx) => {
     await tx.execute('DELETE FROM notes WHERE id = ?', [id]);
     await markDirty(tx as unknown as OpSqliteDb, 'note', id, true);

@@ -162,6 +162,10 @@ export async function updateListItem(
 }
 
 export async function deleteListItem(db: OpSqliteDb, id: string): Promise<void> {
+  const { rows } = await db.execute('SELECT id FROM list_items WHERE id = ?', [id]);
+  if (!rows || rows.length === 0) {
+    throw new Error(`List item not found: ${id}`);
+  }
   await db.transaction(async (tx) => {
     await tx.execute('DELETE FROM list_items WHERE id = ?', [id]);
     await markDirty(tx as unknown as OpSqliteDb, 'listItem', id, true);

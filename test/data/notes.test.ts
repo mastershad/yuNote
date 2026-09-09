@@ -137,4 +137,8 @@ describe('notes repository', () => {
       expect.objectContaining({ entity_type: 'note', entity_id: note.id, deleted: 1 }),
     ]);
   });
+
+  it('deleteNote throws when the note does not exist', async () => {
+    await expect(deleteNote(db, 'does-not-exist')).rejects.toThrow('Note not found: does-not-exist');
+  });
 });

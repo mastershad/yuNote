@@ -174,12 +174,33 @@ describe('applyStructuredAction', () => {
     expect(await listItemsForList(db, list.id)).toEqual([]);
   });
 
-  it('a Modify/Remove/Complete targeting an id that no longer exists locally is a no-op, reported as failed, not thrown', async () => {
+  it('Modify targeting a nonexistent note is reported as failed, not thrown', async () => {
     const result = await applyStructuredAction(db, {
       verb: 'Modify',
       targetType: 'note',
       targetId: 'does-not-exist',
       content: 'irrelevant',
+    });
+
+    expect(result).toEqual({ status: 'failed', reason: expect.stringContaining('does-not-exist') });
+  });
+
+  it('Remove targeting a nonexistent note is reported as failed, not thrown', async () => {
+    const result = await applyStructuredAction(db, {
+      verb: 'Remove',
+      targetType: 'note',
+      targetId: 'does-not-exist',
+    });
+
+    expect(result).toEqual({ status: 'failed', reason: expect.stringContaining('does-not-exist') });
+  });
+
+  it('Complete targeting a nonexistent listItem is reported as failed, not thrown', async () => {
+    const result = await applyStructuredAction(db, {
+      verb: 'Complete',
+      targetType: 'listItem',
+      targetId: 'does-not-exist',
+      parentListId: 'some-list-id',
     });
 
     expect(result).toEqual({ status: 'failed', reason: expect.stringContaining('does-not-exist') });

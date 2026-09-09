@@ -132,4 +132,8 @@ describe('lists repository', () => {
     const { rows: listRows } = await db.execute('SELECT * FROM sync_outbox WHERE entity_id = ?', [list.id]);
     expect(listRows).toEqual([expect.objectContaining({ deleted: 1 })]);
   });
+
+  it('deleteListItem throws when the item does not exist', async () => {
+    await expect(deleteListItem(db, 'does-not-exist')).rejects.toThrow('List item not found: does-not-exist');
+  });
 });
