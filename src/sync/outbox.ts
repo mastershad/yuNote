@@ -39,13 +39,7 @@ export async function flushOutbox(db: OpSqliteDb, transport: LocalTransport): Pr
   const transferId = generateId();
   await transport.send({ transferId, kind: 'sync-push', small: { entities } });
 
-  for (const row of dirty) {
-    await db.execute('UPDATE sync_outbox SET transfer_id = ? WHERE entity_type = ? AND entity_id = ?', [
-      transferId,
-      row.entity_type,
-      row.entity_id,
-    ]);
-  }
+  await db.execute('UPDATE sync_outbox SET transfer_id = ? WHERE transfer_id IS NULL', [transferId]);
 }
 
 export function registerSyncHandlers(db: OpSqliteDb, transport: LocalTransport): () => void {
