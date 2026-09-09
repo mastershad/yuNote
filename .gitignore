@@ -1,2 +1,15 @@
 .worktrees/
 node_modules/
+
+# Android/IntelliJ (matches mobile-app's own convention in the sibling
+# IoT-Key-Fob-Project repo's .gitignore)
+build/
+.idea
+.gradle
+local.properties
+*.iml
+*.hprof
+.cxx/
+*.keystore
+!debug.keystore
+.kotlin/

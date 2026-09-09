@@ -1,0 +1,52 @@
+buildscript {
+    ext {
+        buildToolsVersion = "36.0.0"
+        minSdkVersion = 24
+        compileSdkVersion = 36
+        targetSdkVersion = 36
+        ndkVersion = "27.1.12297006"
+        kotlinVersion = "2.1.20"
+    }
+    repositories {
+        google()
+        mavenCentral()
+    }
+    dependencies {
+        classpath("com.android.tools.build:gradle")
+        classpath("com.facebook.react:react-native-gradle-plugin")
+        classpath("org.jetbrains.kotlin:kotlin-gradle-plugin")
+    }
+}
+
+apply plugin: "com.facebook.react.rootproject"
+
+// This project's path is deep enough (especially inside an SDD worktree,
+// e.g. .worktrees/<name>/) that CMake object file paths under a native
+// module's own build (node_modules/<pkg>/android/.cxx/...) can exceed
+// Windows' 260-character limit. @op-engineering/op-sqlite ships its own
+// independent CMake build (see its android/build.gradle), so it hits this.
+// Same root cause and same targeted fix as documented in the sibling
+// IoT-Key-Fob-Project repo's docs/known-development-issues.md (#4) for
+// react-native-nitro-modules — relocate the module's own CMake build
+// staging directory to a short path. Uses findProject (not project) so a
+// future removal of a listed module degrades gracefully instead of failing
+// Gradle configuration with UnknownProjectException. Any future native
+// module that ships its own CMake/C++ build (check for android/CMakeLists.txt
+// in the package) must be added to this array, or it will hit the same
+// failure the first time its native code needs to compile. Do NOT switch
+// this to a blanket `subprojects { afterEvaluate { ... } }` form — the
+// sibling repo's doc records that failing with a confusing
+// "Cannot run Project.afterEvaluate(Closure) when the project is already
+// evaluated" error across multiple attempts; the targeted per-project form
+// below is the one that works reliably.
+["op-engineering_op-sqlite"].each { moduleName ->
+    findProject(":${moduleName}")?.afterEvaluate { proj ->
+        def androidExt = proj.extensions.findByName('android')
+        if (androidExt != null
+                && androidExt.externalNativeBuild != null
+                && androidExt.externalNativeBuild.cmake.path != null) {
+            androidExt.externalNativeBuild.cmake.buildStagingDirectory =
+                new File("C:/rncxx/${moduleName}")
+        }
+    }
+}
