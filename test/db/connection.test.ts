@@ -22,7 +22,7 @@ describe('openMigratedDatabase', () => {
         "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
       );
 
-      expect(rows?.map((r) => r.name)).toEqual(['classes', 'list_items', 'lists', 'notes']);
+      expect(rows?.map((r) => r.name)).toEqual(['classes', 'list_items', 'lists', 'notes', 'sync_outbox']);
     } finally {
       db.close();
     }
@@ -39,7 +39,7 @@ describe('openMigratedDatabase', () => {
       // real native binding. See src/db/connection.ts for the full note.
       const { rows } = await db.execute('SELECT * FROM pragma_user_version()');
 
-      expect(rows?.[0]?.user_version).toBe(1);
+      expect(rows?.[0]?.user_version).toBe(2);
     } finally {
       db.close();
     }
@@ -62,7 +62,7 @@ describe('openMigratedDatabase', () => {
         "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
       );
 
-      expect(rows?.map((r) => r.name)).toEqual(['classes', 'list_items', 'lists', 'notes']);
+      expect(rows?.map((r) => r.name)).toEqual(['classes', 'list_items', 'lists', 'notes', 'sync_outbox']);
     } finally {
       secondOpen.close();
     }
@@ -91,6 +91,49 @@ describe('openMigratedDatabase', () => {
         const { rows } = await db.execute(`SELECT * FROM pragma_table_info('${table}')`);
         expect(rows?.some((r) => r.name === 'synced_at')).toBe(true);
       }
+    } finally {
+      db.close();
+    }
+  });
+
+  it('migration 2 adds a rev column (default 1) to notes/lists/list_items but not classes', async () => {
+    const db = await openMigratedDatabase({ name: 'test.sqlite', location: dir });
+
+    try {
+      for (const table of ['notes', 'lists', 'list_items']) {
+        const { rows } = await db.execute(`SELECT * FROM pragma_table_info('${table}')`);
+        const revColumn = rows?.find((r) => r.name === 'rev');
+        expect(revColumn).toBeDefined();
+        expect(revColumn?.dflt_value).toBe('1');
+      }
+
+      const { rows: classesColumns } = await db.execute("SELECT * FROM pragma_table_info('classes')");
+      expect(classesColumns?.some((r) => r.name === 'rev')).toBe(false);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('migration 2 adds a sync_outbox table with no rows initially', async () => {
+    const db = await openMigratedDatabase({ name: 'test.sqlite', location: dir });
+
+    try {
+      const { rows: tables } = await db.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name");
+      expect(tables?.map((r) => r.name)).toEqual(['classes', 'list_items', 'lists', 'notes', 'sync_outbox']);
+
+      const { rows } = await db.execute('SELECT * FROM sync_outbox');
+      expect(rows).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('sets user_version to 2 after running both migrations', async () => {
+    const db = await openMigratedDatabase({ name: 'test.sqlite', location: dir });
+
+    try {
+      const { rows } = await db.execute('SELECT * FROM pragma_user_version()');
+      expect(rows?.[0]?.user_version).toBe(2);
     } finally {
       db.close();
     }
@@ -133,10 +176,10 @@ describe('openMigratedDatabase', () => {
       const { rows } = await recovered.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
       );
-      expect(rows?.map((r) => r.name)).toEqual(['classes', 'list_items', 'lists', 'notes']);
+      expect(rows?.map((r) => r.name)).toEqual(['classes', 'list_items', 'lists', 'notes', 'sync_outbox']);
 
       const { rows: versionRows } = await recovered.execute('SELECT * FROM pragma_user_version()');
-      expect(versionRows?.[0]?.user_version).toBe(1);
+      expect(versionRows?.[0]?.user_version).toBe(2);
     } finally {
       recovered.close();
     }

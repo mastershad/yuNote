@@ -85,6 +85,36 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 2,
+    up: async (db) => {
+      // rev: bumped on every local mutation, whether user-initiated or an
+      // applied Structured Action (design spec §5.1/§5.3) -- used for
+      // sync idempotency/ordering, not merge conflicts (yuNote's local
+      // domain layer is the single writer, so there's nothing to merge).
+      // classes deliberately excluded, same rule as synced_at above: a
+      // class row structurally cannot participate in sync.
+      await db.execute('ALTER TABLE notes ADD COLUMN rev INTEGER NOT NULL DEFAULT 1');
+      await db.execute('ALTER TABLE lists ADD COLUMN rev INTEGER NOT NULL DEFAULT 1');
+      await db.execute('ALTER TABLE list_items ADD COLUMN rev INTEGER NOT NULL DEFAULT 1');
+
+      // Dirty-row tracking for the sync outbox (design spec §5.6). `deleted`
+      // is a tombstone: once a note/list/list_item is deleted locally, the
+      // row itself is gone, but the outbox still needs to tell Key Fob to
+      // relay a DELETE to the cloud replica -- this table is the only place
+      // that fact survives the deletion.
+      await db.execute(`
+        CREATE TABLE sync_outbox (
+          entity_type TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          deleted INTEGER NOT NULL DEFAULT 0,
+          transfer_id TEXT,
+          created_at TEXT NOT NULL,
+          PRIMARY KEY (entity_type, entity_id)
+        )
+      `);
+    },
+  },
 ];
 
 export async function openMigratedDatabase(options: { name: string; location: string }): Promise<OpSqliteDb> {
