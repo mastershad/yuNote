@@ -87,4 +87,54 @@ describe('notes repository', () => {
     const desc = await listNotes(db, { sort: 'title-desc' });
     expect(desc.map((n) => n.title)).toEqual(['Банан', 'Апельсин']);
   });
+
+  it('createNote uses a caller-supplied id when given one', async () => {
+    const note = await createNote(db, { title: 'Идея', content: 'текст', id: 'explicit-id-1' });
+    expect(note.id).toBe('explicit-id-1');
+
+    const all = await listNotes(db, { sort: 'date-desc' });
+    expect(all.map((n) => n.id)).toEqual(['explicit-id-1']);
+  });
+
+  it('createNote still generates a fresh id when none is given', async () => {
+    const note = await createNote(db, { title: 'Идея', content: 'текст' });
+    expect(note.id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('createNote starts rev at 1', async () => {
+    const note = await createNote(db, { title: 'Идея', content: 'текст' });
+    expect(note.rev).toBe(1);
+  });
+
+  it('updateNote bumps rev by 1 on every call', async () => {
+    const note = await createNote(db, { title: 'Идея', content: 'текст' });
+    const once = await updateNote(db, note.id, { title: 'Новое' });
+    expect(once.rev).toBe(2);
+    const twice = await updateNote(db, note.id, { content: 'ещё текст' });
+    expect(twice.rev).toBe(3);
+  });
+
+  it('createNote marks the new note dirty in sync_outbox', async () => {
+    const note = await createNote(db, { title: 'Идея', content: 'текст' });
+    const { rows } = await db.execute('SELECT * FROM sync_outbox WHERE entity_id = ?', [note.id]);
+    expect(rows).toEqual([
+      expect.objectContaining({ entity_type: 'note', entity_id: note.id, deleted: 0, transfer_id: null }),
+    ]);
+  });
+
+  it('updateNote re-marks the note dirty in sync_outbox (idempotent upsert, not a duplicate row)', async () => {
+    const note = await createNote(db, { title: 'Идея', content: 'текст' });
+    await updateNote(db, note.id, { title: 'Новое' });
+    const { rows } = await db.execute('SELECT * FROM sync_outbox WHERE entity_id = ?', [note.id]);
+    expect(rows?.length).toBe(1);
+  });
+
+  it('deleteNote marks the note as a deleted tombstone in sync_outbox instead of removing the outbox row', async () => {
+    const note = await createNote(db, { title: 'Идея', content: 'текст' });
+    await deleteNote(db, note.id);
+    const { rows } = await db.execute('SELECT * FROM sync_outbox WHERE entity_id = ?', [note.id]);
+    expect(rows).toEqual([
+      expect.objectContaining({ entity_type: 'note', entity_id: note.id, deleted: 1 }),
+    ]);
+  });
 });

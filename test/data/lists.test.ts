@@ -86,4 +86,50 @@ describe('lists repository', () => {
     const itemsA = await listItemsForList(db, listA.id);
     expect(itemsA.map((i) => i.text)).toEqual(['Молоко']);
   });
+
+  it('createList uses a caller-supplied id when given one', async () => {
+    const list = await createList(db, 'Покупки', { id: 'explicit-list-id-1' });
+    expect(list.id).toBe('explicit-list-id-1');
+  });
+
+  it('addListItem uses a caller-supplied id when given one', async () => {
+    const list = await createList(db, 'Покупки');
+    const item = await addListItem(db, list.id, 'Молоко', { id: 'explicit-item-id-1' });
+    expect(item.id).toBe('explicit-item-id-1');
+  });
+
+  it('createList starts rev at 1; updateListItem bumps rev by 1', async () => {
+    const list = await createList(db, 'Покупки');
+    expect(list.rev).toBe(1);
+
+    const item = await addListItem(db, list.id, 'Молоко');
+    expect(item.rev).toBe(1);
+
+    const updated = await updateListItem(db, item.id, { checked: true });
+    expect(updated.rev).toBe(2);
+  });
+
+  it('createList and addListItem each mark their entity dirty in sync_outbox', async () => {
+    const list = await createList(db, 'Покупки');
+    const item = await addListItem(db, list.id, 'Молоко');
+
+    const { rows: listRows } = await db.execute('SELECT * FROM sync_outbox WHERE entity_id = ?', [list.id]);
+    expect(listRows).toEqual([expect.objectContaining({ entity_type: 'list', entity_id: list.id, deleted: 0 })]);
+
+    const { rows: itemRows } = await db.execute('SELECT * FROM sync_outbox WHERE entity_id = ?', [item.id]);
+    expect(itemRows).toEqual([expect.objectContaining({ entity_type: 'listItem', entity_id: item.id, deleted: 0 })]);
+  });
+
+  it('deleteListItem tombstones in sync_outbox; deleteList tombstones the list but not its already-deleted items', async () => {
+    const list = await createList(db, 'Покупки');
+    const item = await addListItem(db, list.id, 'Молоко');
+
+    await deleteListItem(db, item.id);
+    const { rows: itemRows } = await db.execute('SELECT * FROM sync_outbox WHERE entity_id = ?', [item.id]);
+    expect(itemRows).toEqual([expect.objectContaining({ deleted: 1 })]);
+
+    await deleteList(db, list.id);
+    const { rows: listRows } = await db.execute('SELECT * FROM sync_outbox WHERE entity_id = ?', [list.id]);
+    expect(listRows).toEqual([expect.objectContaining({ deleted: 1 })]);
+  });
 });
