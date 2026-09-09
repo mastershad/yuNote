@@ -271,4 +271,36 @@ describe('registerActionDispatcher', () => {
 
     expect(transport.acknowledgedIds).toEqual(['transfer-3']);
   });
+
+  it('a structured-action message with `small` absent does not throw, acknowledges, and applies nothing', async () => {
+    const transport = createInMemoryLocalTransport();
+    registerActionDispatcher(db, transport);
+
+    await expect(
+      transport.simulateReceive({
+        transferId: 'transfer-malformed-1',
+        kind: 'structured-action',
+        // small omitted entirely
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(transport.acknowledgedIds).toEqual(['transfer-malformed-1']);
+    expect(await listNotes(db, { sort: 'date-desc' })).toEqual([]);
+  });
+
+  it('a structured-action message with `small` not an object (a string) does not throw, acknowledges, and applies nothing', async () => {
+    const transport = createInMemoryLocalTransport();
+    registerActionDispatcher(db, transport);
+
+    await expect(
+      transport.simulateReceive({
+        transferId: 'transfer-malformed-2',
+        kind: 'structured-action',
+        small: 'not-an-object' as unknown as Record<string, unknown>,
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(transport.acknowledgedIds).toEqual(['transfer-malformed-2']);
+    expect(await listNotes(db, { sort: 'date-desc' })).toEqual([]);
+  });
 });

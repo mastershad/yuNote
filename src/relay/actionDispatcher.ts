@@ -91,6 +91,22 @@ export function registerActionDispatcher(db: OpSqliteDb, transport: LocalTranspo
     if (message.kind !== 'structured-action') {
       return;
     }
+    if (typeof message.small !== 'object' || message.small === null) {
+      // Guard against an absent/malformed payload before it ever reaches
+      // applyStructuredAction: without this, `action.targetType` throws once
+      // inside applyStructuredAction's own try block, then the catch block's
+      // error-message construction (`${action.targetId}: ...`) throws AGAIN
+      // on the same invalid value -- a throw that escapes applyStructuredAction
+      // entirely, rejects this handler's promise, and can abort other
+      // handlers registered on the same transport (registerSyncHandlers is
+      // now registered alongside this one in real usage). Mirrors
+      // applyStructuredAction's own {status: 'failed', reason} shape for a
+      // recoverable failure, without ever touching action.targetId or
+      // calling applyStructuredAction at all:
+      // { status: 'failed', reason: 'malformed structured-action payload' }
+      await transport.acknowledge(message.transferId);
+      return;
+    }
     await applyStructuredAction(db, message.small as unknown as StructuredAction);
     // Acknowledged regardless of whether the action itself applied or
     // failed: the *message* was received and handled either way. A

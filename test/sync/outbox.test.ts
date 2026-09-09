@@ -1,8 +1,9 @@
 import { openMigratedDatabase, type OpSqliteDb } from '../../src/db/connection';
 import { flushOutbox, registerSyncHandlers } from '../../src/sync/outbox';
 import { createInMemoryLocalTransport } from '../../src/relay/inMemoryLocalTransport';
-import { createNote, deleteNote } from '../../src/data/notes';
-import { createList, addListItem } from '../../src/data/lists';
+import { createNote, deleteNote, updateNote } from '../../src/data/notes';
+import { createList, addListItem, updateListItem } from '../../src/data/lists';
+import { createClass } from '../../src/data/classes';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -81,6 +82,46 @@ describe('flushOutbox', () => {
     const secondEntities = (transport.sentMessages[1].small?.entities ?? []) as { id: string }[];
     expect(secondEntities.map((e) => e.id)).toEqual([secondNote.id]);
   });
+
+  it('pushes camelCase DTOs, never the raw snake_case row (no class_id/synced_at leak)', async () => {
+    const klass = await createClass(db, 'Работа');
+    const note = await createNote(db, { title: 'Идея', content: 'текст', classId: klass.id });
+    const list = await createList(db, 'Покупки');
+    const item = await addListItem(db, list.id, 'Молоко');
+    await updateListItem(db, item.id, { checked: true });
+    const transport = createInMemoryLocalTransport();
+
+    await flushOutbox(db, transport);
+
+    const [message] = transport.sentMessages;
+    const entities = (message.small?.entities ?? []) as {
+      entityType: string;
+      id: string;
+      data?: Record<string, unknown>;
+    }[];
+
+    const noteEntity = entities.find((e) => e.id === note.id)!;
+    const listItemEntity = entities.find((e) => e.id === item.id)!;
+
+    // camelCase present
+    expect(noteEntity.data).toEqual(
+      expect.objectContaining({ createdAt: expect.any(String), updatedAt: expect.any(String) }),
+    );
+    expect(listItemEntity.data).toEqual(expect.objectContaining({ listId: list.id }));
+
+    // snake_case / dropped fields never present as keys, on any entity
+    for (const entity of entities) {
+      if (!entity.data) continue;
+      expect(Object.keys(entity.data)).not.toContain('class_id');
+      expect(Object.keys(entity.data)).not.toContain('synced_at');
+      expect(Object.keys(entity.data)).not.toContain('created_at');
+      expect(Object.keys(entity.data)).not.toContain('updated_at');
+      expect(Object.keys(entity.data)).not.toContain('list_id');
+    }
+
+    expect(typeof listItemEntity.data!.checked).toBe('boolean');
+    expect(listItemEntity.data!.checked).toBe(true);
+  });
 });
 
 describe('registerSyncHandlers', () => {
@@ -131,19 +172,52 @@ describe('registerSyncHandlers', () => {
     expect(noteRows).toHaveLength(1);
   });
 
-  it('sync-ack clears exactly the outbox rows named in its payload, leaving others untouched', async () => {
+  it('sync-ack with the CURRENT (matching) transferId deletes the row', async () => {
     const noteA = await createNote(db, { title: 'A', content: '' });
     const noteB = await createNote(db, { title: 'B', content: '' });
     const transport = createInMemoryLocalTransport();
     registerSyncHandlers(db, transport);
 
+    await flushOutbox(db, transport);
+    const [pushMessage] = transport.sentMessages;
+    const pushedTransferId = pushMessage.transferId;
+
     await transport.simulateReceive({
       transferId: 't-ack',
       kind: 'sync-ack',
-      small: { acknowledged: [{ entityType: 'note', id: noteA.id }] },
+      small: { acknowledged: [{ entityType: 'note', id: noteA.id, transferId: pushedTransferId }] },
     });
 
     const { rows } = await db.execute('SELECT entity_id FROM sync_outbox');
     expect(rows?.map((r) => r.entity_id)).toEqual([noteB.id]);
+  });
+
+  it('sync-ack with a STALE (old) transferId does not lose a later edit -- row survives, still dirty', async () => {
+    const note = await createNote(db, { title: 'A', content: 'v1' });
+    const transport = createInMemoryLocalTransport();
+    registerSyncHandlers(db, transport);
+
+    // First push: captures the outgoing transferId for this entity.
+    await flushOutbox(db, transport);
+    const [firstPush] = transport.sentMessages;
+    const oldTransferId = firstPush.transferId;
+
+    // Edited again before the ack for the first push arrives -- this resets
+    // transfer_id back to NULL via markDirty, correctly re-marking it dirty.
+    await updateNote(db, note.id, { content: 'v2' });
+
+    // The (stale) ack for the FIRST push arrives late, naming the OLD
+    // transferId.
+    await transport.simulateReceive({
+      transferId: 't-ack-stale',
+      kind: 'sync-ack',
+      small: { acknowledged: [{ entityType: 'note', id: note.id, transferId: oldTransferId }] },
+    });
+
+    const { rows } = await db.execute('SELECT entity_id, transfer_id FROM sync_outbox WHERE entity_id = ?', [
+      note.id,
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows?.[0].transfer_id).toBeNull();
   });
 });

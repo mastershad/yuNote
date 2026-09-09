@@ -1,5 +1,6 @@
 import type { OpSqliteDb } from '../db/connection';
 import { generateId, nowIso } from './id';
+import { markDirty } from './syncOutbox';
 
 export interface List {
   id: string;
@@ -51,21 +52,6 @@ function toListItem(row: ListItemRow): ListItem {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-async function markDirty(
-  db: OpSqliteDb,
-  entityType: 'note' | 'list' | 'listItem',
-  entityId: string,
-  deleted: boolean,
-): Promise<void> {
-  await db.execute(
-    `INSERT INTO sync_outbox (entity_type, entity_id, deleted, transfer_id, created_at)
-     VALUES (?, ?, ?, NULL, ?)
-     ON CONFLICT (entity_type, entity_id) DO UPDATE SET
-       deleted = excluded.deleted, transfer_id = NULL, created_at = excluded.created_at`,
-    [entityType, entityId, deleted ? 1 : 0, nowIso()],
-  );
 }
 
 export async function createList(db: OpSqliteDb, title: string, options?: { id?: string }): Promise<List> {
