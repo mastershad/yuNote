@@ -115,6 +115,50 @@ const migrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 3,
+    up: async (db) => {
+      // Additive columns preserve every v2 row. updated_at needs a constant
+      // default for SQLite's ALTER TABLE, then is backfilled from created_at.
+      await db.execute('ALTER TABLE classes ADD COLUMN rev INTEGER NOT NULL DEFAULT 1');
+      await db.execute("ALTER TABLE classes ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''");
+      await db.execute('UPDATE classes SET updated_at = created_at WHERE updated_at = ?',['']);
+      await db.execute('ALTER TABLE classes ADD COLUMN position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0)');
+      await db.execute('ALTER TABLE notes ADD COLUMN position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0)');
+      await db.execute('ALTER TABLE lists ADD COLUMN class_id TEXT REFERENCES classes(id)');
+      await db.execute('ALTER TABLE lists ADD COLUMN position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0)');
+      await db.execute('ALTER TABLE list_items ADD COLUMN position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0)');
+
+      await db.execute(`CREATE TABLE dataset_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        replica_id TEXT NOT NULL,
+        generation INTEGER NOT NULL CHECK (generation >= 1),
+        revision INTEGER NOT NULL CHECK (revision >= 0)
+      )`);
+      await db.execute("INSERT INTO dataset_state (singleton,replica_id,generation,revision) VALUES (1,lower(hex(randomblob(16))),1,0)");
+
+      await db.execute(`CREATE TABLE mutation_journal (
+        dataset_revision INTEGER NOT NULL CHECK (dataset_revision >= 1),
+        sequence INTEGER NOT NULL CHECK (sequence >= 0),
+        operation_id TEXT NOT NULL,
+        entity_type TEXT NOT NULL CHECK (entity_type IN ('class','note','list','listItem')),
+        entity_id TEXT NOT NULL,
+        mutation TEXT NOT NULL CHECK (mutation IN ('upsert','delete')),
+        payload_json TEXT,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (dataset_revision,sequence),
+        FOREIGN KEY (dataset_revision) REFERENCES applied_operations(dataset_revision)
+      )`);
+      await db.execute(`CREATE TABLE applied_operations (
+        operation_id TEXT PRIMARY KEY,
+        request_json TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        dataset_revision INTEGER NOT NULL UNIQUE CHECK (dataset_revision >= 1),
+        created_at TEXT NOT NULL
+      )`);
+      await db.execute('CREATE INDEX mutation_journal_operation_idx ON mutation_journal(operation_id)');
+    },
+  },
 ];
 
 export async function openMigratedDatabase(options: { name: string; location: string }): Promise<OpSqliteDb> {

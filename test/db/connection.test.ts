@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 
 describe('openMigratedDatabase', () => {
   let dir: string;
+  const allTables = ['applied_operations','classes','dataset_state','list_items','lists','mutation_journal','notes','sync_outbox'];
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'yunote-migration-test-'));
@@ -14,7 +15,7 @@ describe('openMigratedDatabase', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('creates all four tables on a fresh database', async () => {
+  it('creates all local data and journal tables on a fresh database', async () => {
     const db = await openMigratedDatabase({ name: 'test.sqlite', location: dir });
 
     try {
@@ -22,7 +23,7 @@ describe('openMigratedDatabase', () => {
         "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
       );
 
-      expect(rows?.map((r) => r.name)).toEqual(['classes', 'list_items', 'lists', 'notes', 'sync_outbox']);
+      expect(rows?.map((r) => r.name)).toEqual(allTables);
     } finally {
       db.close();
     }
@@ -39,7 +40,7 @@ describe('openMigratedDatabase', () => {
       // real native binding. See src/db/connection.ts for the full note.
       const { rows } = await db.execute('SELECT * FROM pragma_user_version()');
 
-      expect(rows?.[0]?.user_version).toBe(2);
+      expect(rows?.[0]?.user_version).toBe(3);
     } finally {
       db.close();
     }
@@ -62,7 +63,7 @@ describe('openMigratedDatabase', () => {
         "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
       );
 
-      expect(rows?.map((r) => r.name)).toEqual(['classes', 'list_items', 'lists', 'notes', 'sync_outbox']);
+      expect(rows?.map((r) => r.name)).toEqual(allTables);
     } finally {
       secondOpen.close();
     }
@@ -96,7 +97,7 @@ describe('openMigratedDatabase', () => {
     }
   });
 
-  it('migration 2 adds a rev column (default 1) to notes/lists/list_items but not classes', async () => {
+  it('the latest schema has a rev column with default 1 on every entity table', async () => {
     const db = await openMigratedDatabase({ name: 'test.sqlite', location: dir });
 
     try {
@@ -108,7 +109,8 @@ describe('openMigratedDatabase', () => {
       }
 
       const { rows: classesColumns } = await db.execute("SELECT * FROM pragma_table_info('classes')");
-      expect(classesColumns?.some((r) => r.name === 'rev')).toBe(false);
+      const classRevColumn = classesColumns?.find((r) => r.name === 'rev');
+      expect(classRevColumn?.dflt_value).toBe('1');
     } finally {
       db.close();
     }
@@ -119,7 +121,7 @@ describe('openMigratedDatabase', () => {
 
     try {
       const { rows: tables } = await db.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name");
-      expect(tables?.map((r) => r.name)).toEqual(['classes', 'list_items', 'lists', 'notes', 'sync_outbox']);
+      expect(tables?.map((r) => r.name)).toEqual(allTables);
 
       const { rows } = await db.execute('SELECT * FROM sync_outbox');
       expect(rows).toEqual([]);
@@ -128,12 +130,12 @@ describe('openMigratedDatabase', () => {
     }
   });
 
-  it('sets user_version to 2 after running both migrations', async () => {
+  it('sets user_version to 3 after running all migrations', async () => {
     const db = await openMigratedDatabase({ name: 'test.sqlite', location: dir });
 
     try {
       const { rows } = await db.execute('SELECT * FROM pragma_user_version()');
-      expect(rows?.[0]?.user_version).toBe(2);
+      expect(rows?.[0]?.user_version).toBe(3);
     } finally {
       db.close();
     }
@@ -176,10 +178,10 @@ describe('openMigratedDatabase', () => {
       const { rows } = await recovered.execute(
         "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name",
       );
-      expect(rows?.map((r) => r.name)).toEqual(['classes', 'list_items', 'lists', 'notes', 'sync_outbox']);
+      expect(rows?.map((r) => r.name)).toEqual(allTables);
 
       const { rows: versionRows } = await recovered.execute('SELECT * FROM pragma_user_version()');
-      expect(versionRows?.[0]?.user_version).toBe(2);
+      expect(versionRows?.[0]?.user_version).toBe(3);
     } finally {
       recovered.close();
     }
