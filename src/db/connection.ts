@@ -159,6 +159,28 @@ const migrations: Migration[] = [
       await db.execute('CREATE INDEX mutation_journal_operation_idx ON mutation_journal(operation_id)');
     },
   },
+  {
+    version: 4,
+    up: async (db) => {
+      // Only installation metadata is stored in SQLite. The corresponding
+      // private key is generated and retained by Android Keystore.
+      await db.execute(`CREATE TABLE installation_identity (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        status TEXT NOT NULL CHECK (status IN ('pending','enrolled')),
+        installation_id TEXT NOT NULL UNIQUE,
+        key_alias TEXT NOT NULL UNIQUE,
+        key_version INTEGER NOT NULL CHECK (key_version >= 1),
+        binding_id TEXT,
+        replica_id TEXT NOT NULL,
+        generation INTEGER NOT NULL CHECK (generation >= 1),
+        applied_revision INTEGER NOT NULL DEFAULT 0 CHECK (applied_revision >= 0),
+        created_at TEXT NOT NULL,
+        enrolled_at TEXT,
+        CHECK ((status = 'pending' AND binding_id IS NULL AND enrolled_at IS NULL) OR
+               (status = 'enrolled' AND binding_id IS NOT NULL AND enrolled_at IS NOT NULL))
+      )`);
+    },
+  },
 ];
 
 export async function openMigratedDatabase(options: { name: string; location: string }): Promise<OpSqliteDb> {
