@@ -1,6 +1,7 @@
-import type { OpSqliteDb } from '../db/connection';
+import type { OpSqliteDb, OpSqliteExecutor } from '../db/connection';
 import { generateId, nowIso } from './id';
 import { markDirty } from './syncOutbox';
+import { runLocalOperation, type JournalEvent } from './localOperation';
 
 export interface Note {
   id: string;
@@ -10,6 +11,7 @@ export interface Note {
   rev: number;
   createdAt: string;
   updatedAt: string;
+  position: number;
 }
 
 interface NoteRow {
@@ -20,6 +22,7 @@ interface NoteRow {
   rev: number;
   created_at: string;
   updated_at: string;
+  position: number;
 }
 
 function toNote(row: NoteRow): Note {
@@ -31,7 +34,22 @@ function toNote(row: NoteRow): Note {
     rev: row.rev,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    position: row.position,
   };
+}
+
+export async function createNoteInTransaction(
+  tx:OpSqliteExecutor,
+  input:{ id:string; title:string; content:string; classId:string|null; position?:number },
+):Promise<{ note:Note; events:JournalEvent[] }> {
+  const timestamp=nowIso();
+  const note:Note={ ...input, position:input.position ?? 0, rev:1, createdAt:timestamp, updatedAt:timestamp };
+  await tx.execute(
+    'INSERT INTO notes (id,title,content,class_id,rev,created_at,updated_at,position) VALUES (?,?,?,?,1,?,?,?)',
+    [note.id,note.title,note.content,note.classId,timestamp,timestamp,note.position],
+  );
+  await markDirty(tx,'note',note.id,false);
+  return { note,events:[{ entityType:'note',entityId:note.id,mutation:'upsert',payload:note }] };
 }
 
 export async function createNote(
@@ -39,16 +57,26 @@ export async function createNote(
   input: { title: string; content: string; classId?: string; id?: string },
 ): Promise<Note> {
   const id = input.id ?? generateId();
-  const timestamp = nowIso();
   const classId = input.classId ?? null;
-  await db.transaction(async (tx) => {
-    await tx.execute(
-      'INSERT INTO notes (id, title, content, class_id, rev, created_at, updated_at) VALUES (?, ?, ?, ?, 1, ?, ?)',
-      [id, input.title, input.content, classId, timestamp, timestamp],
-    );
-    await markDirty(tx as unknown as OpSqliteDb, 'note', id, false);
-  });
-  return { id, title: input.title, content: input.content, classId, rev: 1, createdAt: timestamp, updatedAt: timestamp };
+  const outcome=await runLocalOperation(db,{ operationId:generateId(),request:{ action:'createNote',id,title:input.title,content:input.content,classId },execute:async(tx)=>{
+    const created=await createNoteInTransaction(tx,{ id,title:input.title,content:input.content,classId });
+    return { result:created.note,events:created.events };
+  }});
+  return outcome.result;
+}
+
+export async function updateNoteInTransaction(
+  tx:OpSqliteExecutor,id:string,patch:Partial<{ title:string;content:string;classId:string|null;position:number }>,
+):Promise<{ note:Note;events:JournalEvent[] }> {
+  const { rows }=await tx.execute('SELECT * FROM notes WHERE id = ?',[id]);
+  if (!rows?.[0]) throw new Error(`Note not found: ${id}`);
+  const existing=toNote(rows[0] as unknown as NoteRow);
+  const note:Note={ ...existing,...(patch.title!==undefined?{title:patch.title}:{}),...(patch.content!==undefined?{content:patch.content}:{}),
+    ...(patch.classId!==undefined?{classId:patch.classId}:{}),...(patch.position!==undefined?{position:patch.position}:{}),rev:existing.rev+1,updatedAt:nowIso() };
+  await tx.execute('UPDATE notes SET title=?,content=?,class_id=?,rev=?,updated_at=?,position=? WHERE id=?',
+    [note.title,note.content,note.classId,note.rev,note.updatedAt,note.position,id]);
+  await markDirty(tx,'note',id,false);
+  return { note,events:[{ entityType:'note',entityId:id,mutation:'upsert',payload:note }] };
 }
 
 export async function updateNote(
@@ -56,38 +84,26 @@ export async function updateNote(
   id: string,
   patch: Partial<{ title: string; content: string; classId: string | null }>,
 ): Promise<Note> {
-  const { rows } = await db.execute('SELECT * FROM notes WHERE id = ?', [id]);
-  const existing = toNote((rows as unknown as NoteRow[])[0]);
+  const outcome=await runLocalOperation(db,{ operationId:generateId(),request:{ action:'updateNote',id,patch },execute:async(tx)=>{
+    const updated=await updateNoteInTransaction(tx,id,patch);
+    return { result:updated.note,events:updated.events };
+  }});
+  return outcome.result;
+}
 
-  const next: Note = {
-    ...existing,
-    ...(patch.title !== undefined ? { title: patch.title } : {}),
-    ...(patch.content !== undefined ? { content: patch.content } : {}),
-    ...(patch.classId !== undefined ? { classId: patch.classId } : {}),
-    rev: existing.rev + 1,
-    updatedAt: nowIso(),
-  };
-
-  await db.transaction(async (tx) => {
-    await tx.execute(
-      'UPDATE notes SET title = ?, content = ?, class_id = ?, rev = ?, updated_at = ? WHERE id = ?',
-      [next.title, next.content, next.classId, next.rev, next.updatedAt, id],
-    );
-    await markDirty(tx as unknown as OpSqliteDb, 'note', id, false);
-  });
-
-  return next;
+export async function deleteNoteInTransaction(tx:OpSqliteExecutor,id:string):Promise<JournalEvent[]> {
+  const { rows }=await tx.execute('SELECT id FROM notes WHERE id=?',[id]);
+  if (!rows?.length) throw new Error(`Note not found: ${id}`);
+  await tx.execute('DELETE FROM notes WHERE id=?',[id]);
+  await markDirty(tx,'note',id,true);
+  return [{ entityType:'note',entityId:id,mutation:'delete' }];
 }
 
 export async function deleteNote(db: OpSqliteDb, id: string): Promise<void> {
-  const { rows } = await db.execute('SELECT id FROM notes WHERE id = ?', [id]);
-  if (!rows || rows.length === 0) {
-    throw new Error(`Note not found: ${id}`);
-  }
-  await db.transaction(async (tx) => {
-    await tx.execute('DELETE FROM notes WHERE id = ?', [id]);
-    await markDirty(tx as unknown as OpSqliteDb, 'note', id, true);
-  });
+  await runLocalOperation(db,{ operationId:generateId(),request:{ action:'deleteNote',id },execute:async(tx)=>{
+    const events=await deleteNoteInTransaction(tx,id);
+    return { result:{ status:'deleted' },events };
+  }});
 }
 
 export async function listNotes(

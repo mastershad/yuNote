@@ -107,6 +107,29 @@ describe('applyStructuredAction', () => {
     expect(result).toEqual({ status: 'applied' });
     const items = await listItemsForList(db, 'yn-server-list-1');
     expect(items).toEqual([expect.objectContaining({ id: 'yn-server-item-2', text: 'Солнцезащитный крем' })]);
+    expect((await db.execute('SELECT revision FROM dataset_state')).rows).toEqual([{ revision:1 }]);
+    expect((await db.execute('SELECT entity_type FROM mutation_journal ORDER BY sequence')).rows).toEqual([
+      { entity_type:'list' },{ entity_type:'listItem' },
+    ]);
+  });
+
+  it('rolls back an entire Clear when a later target fails',async()=>{
+    const noteA=await createNote(db,{ title:'A',content:'' });
+    const noteB=await createNote(db,{ title:'B',content:'' });
+    const result=await applyStructuredAction(db,{ verb:'Clear',targetType:'note',targetId:noteA.id,targetIds:[noteA.id,'missing'] },'op-clear');
+    expect(result.status).toBe('failed');
+    expect((await listNotes(db,{ sort:'title-asc' })).map(note=>note.id)).toEqual([noteA.id,noteB.id]);
+    expect((await db.execute('SELECT revision FROM dataset_state')).rows).toEqual([{ revision:2 }]);
+  });
+
+  it('replays one operationId once and rejects reuse with changed action content',async()=>{
+    const action={ verb:'Capture' as const,targetType:'note' as const,targetId:'stable-note',title:'A',content:'same' };
+    expect(await applyStructuredAction(db,action,'operation-stable')).toEqual({ status:'applied' });
+    expect(await applyStructuredAction(db,action,'operation-stable')).toEqual({ status:'applied' });
+    const mismatch=await applyStructuredAction(db,{ ...action,content:'changed' },'operation-stable');
+    expect(mismatch).toEqual({ status:'failed',reason:expect.stringContaining('different request') });
+    expect((await db.execute('SELECT revision FROM dataset_state')).rows).toEqual([{ revision:1 }]);
+    expect(await listNotes(db,{ sort:'date-desc' })).toHaveLength(1);
   });
 
   it('Modify on a listItem updates its text', async () => {

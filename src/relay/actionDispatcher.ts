@@ -1,7 +1,9 @@
 import type { OpSqliteDb } from '../db/connection';
 import type { LocalTransport, LocalTransportMessage } from './localTransport';
-import { createNote, updateNote, deleteNote } from '../data/notes';
-import { createList, addListItem, updateListItem, deleteListItem } from '../data/lists';
+import { createNoteInTransaction,updateNoteInTransaction,deleteNoteInTransaction } from '../data/notes';
+import { createListInTransaction,addListItemInTransaction,updateListItemInTransaction,deleteListItemInTransaction } from '../data/lists';
+import { runLocalOperation } from '../data/localOperation';
+import { generateId } from '../data/id';
 
 export interface StructuredAction {
   verb: 'Capture' | 'Modify' | 'Remove' | 'Complete' | 'Clear';
@@ -16,65 +18,39 @@ export interface StructuredAction {
 
 export type ActionDispatchResult = { status: 'applied' } | { status: 'failed'; reason: string };
 
-export async function applyStructuredAction(db: OpSqliteDb, action: StructuredAction): Promise<ActionDispatchResult> {
+export async function applyStructuredAction(db: OpSqliteDb, action: StructuredAction, operationId=generateId()): Promise<ActionDispatchResult> {
+  const supported=(action.targetType==='note' && ['Capture','Modify','Remove','Clear'].includes(action.verb)) ||
+    (action.targetType==='listItem' && ['Capture','Modify','Complete','Remove','Clear'].includes(action.verb));
+  if (!supported) return { status:'failed',reason:`unsupported targetType/verb combination: ${action.targetType}/${action.verb}` };
   try {
-    if (action.targetType === 'note') {
-      if (action.verb === 'Capture') {
-        await createNote(db, { id: action.targetId, title: action.title ?? '', content: action.content ?? '' });
-        return { status: 'applied' };
-      }
-      if (action.verb === 'Modify') {
-        await updateNote(db, action.targetId, { content: action.content ?? '' });
-        return { status: 'applied' };
-      }
-      if (action.verb === 'Remove') {
-        await deleteNote(db, action.targetId);
-        return { status: 'applied' };
-      }
-      if (action.verb === 'Clear') {
-        for (const id of action.targetIds ?? [action.targetId]) {
-          await deleteNote(db, id);
+    const outcome=await runLocalOperation(db,{ operationId,request:action,execute:async(tx)=>{
+      const events=[];
+      if (action.targetType==='note') {
+        if (action.verb==='Capture') {
+          events.push(...(await createNoteInTransaction(tx,{ id:action.targetId,title:action.title ?? '',content:action.content ?? '',classId:null })).events);
+        } else if (action.verb==='Modify') {
+          events.push(...(await updateNoteInTransaction(tx,action.targetId,{ content:action.content ?? '' })).events);
+        } else if (action.verb==='Remove') {
+          events.push(...await deleteNoteInTransaction(tx,action.targetId));
+        } else {
+          for (const id of action.targetIds ?? [action.targetId]) events.push(...await deleteNoteInTransaction(tx,id));
         }
-        return { status: 'applied' };
+      } else if (action.verb==='Capture') {
+        const parentListId=action.parentListId ?? '';
+        if (action.listName!==undefined) events.push(...(await createListInTransaction(tx,{ id:parentListId,title:action.listName,classId:null })).events);
+        events.push(...(await addListItemInTransaction(tx,{ id:action.targetId,listId:parentListId,text:action.content ?? '' })).events);
+      } else if (action.verb==='Modify') {
+        events.push(...(await updateListItemInTransaction(tx,action.targetId,{ text:action.content ?? '' })).events);
+      } else if (action.verb==='Complete') {
+        events.push(...(await updateListItemInTransaction(tx,action.targetId,{ checked:true })).events);
+      } else if (action.verb==='Remove') {
+        events.push(...await deleteListItemInTransaction(tx,action.targetId));
+      } else {
+        for (const id of action.targetIds ?? [action.targetId]) events.push(...await deleteListItemInTransaction(tx,id));
       }
-    }
-
-    if (action.targetType === 'listItem') {
-      if (action.verb === 'Capture') {
-        // listName present means the parent list doesn't exist locally
-        // yet -- create it first, using the server-provided parentListId
-        // as its id, exactly like the item itself uses targetId.
-        if (action.listName !== undefined) {
-          await createList(db, action.listName, { id: action.parentListId });
-        }
-        await addListItem(db, action.parentListId ?? '', action.content ?? '', { id: action.targetId });
-        return { status: 'applied' };
-      }
-      if (action.verb === 'Modify') {
-        await updateListItem(db, action.targetId, { text: action.content ?? '' });
-        return { status: 'applied' };
-      }
-      if (action.verb === 'Complete') {
-        await updateListItem(db, action.targetId, { checked: true });
-        return { status: 'applied' };
-      }
-      if (action.verb === 'Remove') {
-        await deleteListItem(db, action.targetId);
-        return { status: 'applied' };
-      }
-      if (action.verb === 'Clear') {
-        for (const id of action.targetIds ?? [action.targetId]) {
-          await deleteListItem(db, id);
-        }
-        return { status: 'applied' };
-      }
-    }
-
-    // targetType: 'list' (whole-list Capture/Modify/Remove) is never
-    // actually produced by the shipped n8n graph today (confirmed while
-    // planning this task) -- fails safely rather than pretending to
-    // support it.
-    return { status: 'failed', reason: `unsupported targetType/verb combination: ${action.targetType}/${action.verb}` };
+      return { result:{ status:'applied' as const },events };
+    }});
+    return outcome.result;
   } catch (error) {
     // A repository function throws when it can't find the row it was asked
     // to update/delete (design spec §9: "Structured Action targets an id
@@ -107,7 +83,7 @@ export function registerActionDispatcher(db: OpSqliteDb, transport: LocalTranspo
       await transport.acknowledge(message.transferId);
       return;
     }
-    await applyStructuredAction(db, message.small as unknown as StructuredAction);
+    await applyStructuredAction(db, message.small as unknown as StructuredAction, message.transferId);
     // Acknowledged regardless of whether the action itself applied or
     // failed: the *message* was received and handled either way. A
     // permanently-failed action (target no longer exists) surfaces to

@@ -57,4 +57,19 @@ describe('runLocalOperation', () => {
       expect((await db.execute('SELECT * FROM applied_operations')).rows).toEqual([]);
     } finally { db.close(); }
   });
+
+  it('replays the persisted result after the database is closed and reopened',async()=>{
+    let db=await openMigratedDatabase({ name:'test.sqlite',location:dir });
+    await runLocalOperation(db,{ operationId:'durable-op',request:{ id:'n' },execute:async()=>({
+      result:{ status:'applied',message:'готово' },events:[{ entityType:'note',entityId:'n',mutation:'delete' }],
+    })});
+    db.close();
+    db=await openMigratedDatabase({ name:'test.sqlite',location:dir });
+    try {
+      const replay=await runLocalOperation(db,{ operationId:'durable-op',request:{ id:'n' },execute:async()=>{
+        throw new Error('must not execute after restart');
+      }});
+      expect(replay).toEqual({ replayed:true,revision:1,result:{ message:'готово',status:'applied' } });
+    } finally { db.close(); }
+  });
 });

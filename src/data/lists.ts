@@ -1,10 +1,13 @@
-import type { OpSqliteDb } from '../db/connection';
+import type { OpSqliteDb, OpSqliteExecutor } from '../db/connection';
 import { generateId, nowIso } from './id';
 import { markDirty } from './syncOutbox';
+import { runLocalOperation, type JournalEvent } from './localOperation';
 
 export interface List {
   id: string;
   title: string;
+  classId:string|null;
+  position:number;
   rev: number;
   createdAt: string;
   updatedAt: string;
@@ -18,11 +21,14 @@ export interface ListItem {
   rev: number;
   createdAt: string;
   updatedAt: string;
+  position:number;
 }
 
 interface ListRow {
   id: string;
   title: string;
+  class_id:string|null;
+  position:number;
   rev: number;
   created_at: string;
   updated_at: string;
@@ -36,10 +42,11 @@ interface ListItemRow {
   rev: number;
   created_at: string;
   updated_at: string;
+  position:number;
 }
 
 function toList(row: ListRow): List {
-  return { id: row.id, title: row.title, rev: row.rev, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id:row.id,title:row.title,classId:row.class_id,position:row.position,rev:row.rev,createdAt:row.created_at,updatedAt:row.updated_at };
 }
 
 function toListItem(row: ListItemRow): ListItem {
@@ -51,22 +58,52 @@ function toListItem(row: ListItemRow): ListItem {
     rev: row.rev,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    position:row.position,
   };
 }
 
-export async function createList(db: OpSqliteDb, title: string, options?: { id?: string }): Promise<List> {
+export async function createListInTransaction(tx:OpSqliteExecutor,input:{ id:string;title:string;classId:string|null;position?:number }):Promise<{ list:List;events:JournalEvent[] }> {
+  const timestamp=nowIso();
+  const list:List={ id:input.id,title:input.title,classId:input.classId,position:input.position ?? 0,rev:1,createdAt:timestamp,updatedAt:timestamp };
+  await tx.execute('INSERT INTO lists (id,title,class_id,position,rev,created_at,updated_at) VALUES (?,?,?,?,1,?,?)',
+    [list.id,list.title,list.classId,list.position,timestamp,timestamp]);
+  await markDirty(tx,'list',list.id,false);
+  return { list,events:[{ entityType:'list',entityId:list.id,mutation:'upsert',payload:list }] };
+}
+
+export async function updateListInTransaction(
+  tx:OpSqliteExecutor,id:string,patch:Partial<{ title:string;classId:string|null;position:number }>,
+):Promise<{ list:List;events:JournalEvent[] }> {
+  const { rows }=await tx.execute('SELECT * FROM lists WHERE id=?',[id]);
+  if (!rows?.[0]) throw new Error(`List not found: ${id}`);
+  const existing=toList(rows[0] as unknown as ListRow);
+  const list:List={ ...existing,...(patch.title!==undefined?{title:patch.title}:{}),...(patch.classId!==undefined?{classId:patch.classId}:{}),
+    ...(patch.position!==undefined?{position:patch.position}:{}),rev:existing.rev+1,updatedAt:nowIso() };
+  await tx.execute('UPDATE lists SET title=?,class_id=?,position=?,rev=?,updated_at=? WHERE id=?',
+    [list.title,list.classId,list.position,list.rev,list.updatedAt,id]);
+  await markDirty(tx,'list',id,false);
+  return { list,events:[{ entityType:'list',entityId:id,mutation:'upsert',payload:list }] };
+}
+
+export async function createList(db: OpSqliteDb, title: string, options?: { id?: string;classId?:string|null }): Promise<List> {
   const id = options?.id ?? generateId();
-  const timestamp = nowIso();
-  await db.transaction(async (tx) => {
-    await tx.execute('INSERT INTO lists (id, title, rev, created_at, updated_at) VALUES (?, ?, 1, ?, ?)', [
-      id,
-      title,
-      timestamp,
-      timestamp,
-    ]);
-    await markDirty(tx as unknown as OpSqliteDb, 'list', id, false);
-  });
-  return { id, title, rev: 1, createdAt: timestamp, updatedAt: timestamp };
+  const classId=options?.classId ?? null;
+  const outcome=await runLocalOperation(db,{ operationId:generateId(),request:{ action:'createList',id,title,classId },execute:async(tx)=>{
+    const created=await createListInTransaction(tx,{ id,title,classId });
+    return { result:created.list,events:created.events };
+  }});
+  return outcome.result;
+}
+
+export async function deleteListInTransaction(tx:OpSqliteExecutor,id:string):Promise<JournalEvent[]> {
+  const { rows:listRows }=await tx.execute('SELECT id FROM lists WHERE id=?',[id]);
+  if (!listRows?.length) throw new Error(`List not found: ${id}`);
+  const { rows }=await tx.execute('SELECT id FROM list_items WHERE list_id=?',[id]);
+  await tx.execute('DELETE FROM list_items WHERE list_id=?',[id]);
+  await tx.execute('DELETE FROM lists WHERE id=?',[id]);
+  await markDirty(tx,'list',id,true);
+  for (const row of (rows ?? []) as { id:string }[]) await tx.execute('DELETE FROM sync_outbox WHERE entity_type=? AND entity_id=?',['listItem',row.id]);
+  return [{ entityType:'list',entityId:id,mutation:'delete' }];
 }
 
 export async function deleteList(db: OpSqliteDb, id: string): Promise<void> {
@@ -79,19 +116,9 @@ export async function deleteList(db: OpSqliteDb, id: string): Promise<void> {
   // cascades the same way server-side (yunoteSyncStore.deleteList), so
   // one tombstone for the list is sufficient; the items simply vanish
   // from both sides without needing their own delete messages.
-  const { rows } = await db.execute('SELECT id FROM list_items WHERE list_id = ?', [id]);
-  await db.transaction(async (tx) => {
-    await tx.execute('DELETE FROM list_items WHERE list_id = ?', [id]);
-    await tx.execute('DELETE FROM lists WHERE id = ?', [id]);
-    await markDirty(tx as unknown as OpSqliteDb, 'list', id, true);
-    for (const row of (rows ?? []) as { id: string }[]) {
-      // Remove any outbox entry the deleted items already had queued --
-      // there's nothing left to push for them now that the whole list is
-      // gone, and leaving a stale non-deleted entry would make the next
-      // flush try to sync an item whose list no longer exists.
-      await tx.execute('DELETE FROM sync_outbox WHERE entity_type = ? AND entity_id = ?', ['listItem', row.id]);
-    }
-  });
+  await runLocalOperation(db,{ operationId:generateId(),request:{ action:'deleteList',id },execute:async(tx)=>({
+    result:{ status:'deleted' },events:await deleteListInTransaction(tx,id),
+  })});
 }
 
 export async function listLists(db: OpSqliteDb): Promise<List[]> {
@@ -106,15 +133,32 @@ export async function addListItem(
   options?: { id?: string },
 ): Promise<ListItem> {
   const id = options?.id ?? generateId();
-  const timestamp = nowIso();
-  await db.transaction(async (tx) => {
-    await tx.execute(
-      'INSERT INTO list_items (id, list_id, text, checked, rev, created_at, updated_at) VALUES (?, ?, ?, 0, 1, ?, ?)',
-      [id, listId, text, timestamp, timestamp],
-    );
-    await markDirty(tx as unknown as OpSqliteDb, 'listItem', id, false);
-  });
-  return { id, listId, text, checked: false, rev: 1, createdAt: timestamp, updatedAt: timestamp };
+  const outcome=await runLocalOperation(db,{ operationId:generateId(),request:{ action:'addListItem',id,listId,text },execute:async(tx)=>{
+    const created=await addListItemInTransaction(tx,{ id,listId,text });
+    return { result:created.item,events:created.events };
+  }});
+  return outcome.result;
+}
+
+export async function addListItemInTransaction(tx:OpSqliteExecutor,input:{ id:string;listId:string;text:string;position?:number }):Promise<{ item:ListItem;events:JournalEvent[] }> {
+  const timestamp=nowIso();
+  const item:ListItem={ id:input.id,listId:input.listId,text:input.text,checked:false,position:input.position ?? 0,rev:1,createdAt:timestamp,updatedAt:timestamp };
+  await tx.execute('INSERT INTO list_items (id,list_id,text,checked,position,rev,created_at,updated_at) VALUES (?,?,?,0,?,1,?,?)',
+    [item.id,item.listId,item.text,item.position,timestamp,timestamp]);
+  await markDirty(tx,'listItem',item.id,false);
+  return { item,events:[{ entityType:'listItem',entityId:item.id,mutation:'upsert',payload:item }] };
+}
+
+export async function updateListItemInTransaction(tx:OpSqliteExecutor,id:string,patch:Partial<{ text:string;checked:boolean;position:number }>):Promise<{ item:ListItem;events:JournalEvent[] }> {
+  const { rows }=await tx.execute('SELECT * FROM list_items WHERE id=?',[id]);
+  if (!rows?.[0]) throw new Error(`List item not found: ${id}`);
+  const existing=toListItem(rows[0] as unknown as ListItemRow);
+  const item:ListItem={ ...existing,...(patch.text!==undefined?{text:patch.text}:{}),...(patch.checked!==undefined?{checked:patch.checked}:{}),
+    ...(patch.position!==undefined?{position:patch.position}:{}),rev:existing.rev+1,updatedAt:nowIso() };
+  await tx.execute('UPDATE list_items SET text=?,checked=?,position=?,rev=?,updated_at=? WHERE id=?',
+    [item.text,item.checked?1:0,item.position,item.rev,item.updatedAt,id]);
+  await markDirty(tx,'listItem',id,false);
+  return { item,events:[{ entityType:'listItem',entityId:id,mutation:'upsert',payload:item }] };
 }
 
 export async function updateListItem(
@@ -122,40 +166,26 @@ export async function updateListItem(
   id: string,
   patch: Partial<{ text: string; checked: boolean }>,
 ): Promise<ListItem> {
-  const { rows } = await db.execute('SELECT * FROM list_items WHERE id = ?', [id]);
-  const existing = toListItem((rows as unknown as ListItemRow[])[0]);
+  const outcome=await runLocalOperation(db,{ operationId:generateId(),request:{ action:'updateListItem',id,patch },execute:async(tx)=>{
+    const updated=await updateListItemInTransaction(tx,id,patch);
+    return { result:updated.item,events:updated.events };
+  }});
+  return outcome.result;
+}
 
-  const next: ListItem = {
-    ...existing,
-    ...(patch.text !== undefined ? { text: patch.text } : {}),
-    ...(patch.checked !== undefined ? { checked: patch.checked } : {}),
-    rev: existing.rev + 1,
-    updatedAt: nowIso(),
-  };
-
-  await db.transaction(async (tx) => {
-    await tx.execute('UPDATE list_items SET text = ?, checked = ?, rev = ?, updated_at = ? WHERE id = ?', [
-      next.text,
-      next.checked ? 1 : 0,
-      next.rev,
-      next.updatedAt,
-      id,
-    ]);
-    await markDirty(tx as unknown as OpSqliteDb, 'listItem', id, false);
-  });
-
-  return next;
+export async function deleteListItemInTransaction(tx:OpSqliteExecutor,id:string):Promise<JournalEvent[]> {
+  const { rows }=await tx.execute('SELECT id FROM list_items WHERE id=?',[id]);
+  if (!rows?.length) throw new Error(`List item not found: ${id}`);
+  await tx.execute('DELETE FROM list_items WHERE id=?',[id]);
+  await markDirty(tx,'listItem',id,true);
+  return [{ entityType:'listItem',entityId:id,mutation:'delete' }];
 }
 
 export async function deleteListItem(db: OpSqliteDb, id: string): Promise<void> {
-  const { rows } = await db.execute('SELECT id FROM list_items WHERE id = ?', [id]);
-  if (!rows || rows.length === 0) {
-    throw new Error(`List item not found: ${id}`);
-  }
-  await db.transaction(async (tx) => {
-    await tx.execute('DELETE FROM list_items WHERE id = ?', [id]);
-    await markDirty(tx as unknown as OpSqliteDb, 'listItem', id, true);
-  });
+  await runLocalOperation(db,{ operationId:generateId(),request:{ action:'deleteListItem',id },execute:async(tx)=>{
+    const events=await deleteListItemInTransaction(tx,id);
+    return { result:{ status:'deleted' },events };
+  }});
 }
 
 export async function listItemsForList(db: OpSqliteDb, listId: string): Promise<ListItem[]> {

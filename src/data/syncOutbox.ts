@@ -1,4 +1,4 @@
-import type { OpSqliteDb } from '../db/connection';
+import type { OpSqliteExecutor } from '../db/connection';
 import { nowIso } from './id';
 
 // Shared by notes.ts, lists.ts (every local mutation) and outbox.ts's
@@ -6,7 +6,7 @@ import { nowIso } from './id';
 // implementation of the sync_outbox upsert, rather than three independently
 // maintained copies that can drift from each other.
 export async function markDirty(
-  db: OpSqliteDb,
+  db: OpSqliteExecutor,
   entityType: 'note' | 'list' | 'listItem',
   entityId: string,
   deleted: boolean,
