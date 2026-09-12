@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { createAppStores, type AppStores } from './src/app/stores';
 import { NotesScreen } from './src/ui/NotesScreen';
+import { ListsScreen } from './src/ui/ListsScreen';
 import { getThemePalette, type ThemePalette } from './src/ui/theme';
 
 type Tab = 'notes' | 'lists';
