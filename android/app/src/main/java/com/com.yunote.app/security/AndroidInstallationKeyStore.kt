@@ -36,6 +36,13 @@ class AndroidInstallationKeyStore {
     return Base64.encodeToString(signature, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
   }
 
+  @Synchronized
+  fun deleteKey(alias: String) {
+    validateAlias(alias)
+    val store = keyStore()
+    if (store.containsAlias(alias)) store.deleteEntry(alias)
+  }
+
   private fun keyStore() = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
   private fun generate(alias: String) {

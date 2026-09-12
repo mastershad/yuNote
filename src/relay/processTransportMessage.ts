@@ -70,6 +70,7 @@ export async function processTransportMessage(
       await outbound.acknowledge(message.transferId);
       return;
     }
+    if(message.kind==='unlinked')await installationSync.unlink();
     for (const handler of handlers) {
       await handler(message);
     }

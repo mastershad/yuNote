@@ -42,4 +42,14 @@ class YunoteInstallationKeysModule(context: ReactApplicationContext) : ReactCont
     }
   }
 
+  @ReactMethod
+  fun deleteKey(alias: String, promise: Promise) {
+    try {
+      keys.deleteKey(alias)
+      promise.resolve(null)
+    } catch (error: Exception) {
+      promise.reject("YUNOTE_KEY_DELETE_FAILED", "Installation key could not be deleted", error)
+    }
+  }
+
 }

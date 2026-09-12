@@ -4,12 +4,14 @@ export interface InstallationKeyProvider {
   ensureKey(alias:string):Promise<{publicKeyPem:string}>;
   signUtf8(alias:string,message:string):Promise<string>;
   sha256Utf8(value:string):Promise<string>;
+  deleteKey?(alias:string):Promise<void>;
 }
 
 interface NativeInstallationKeys {
   ensureKey(alias:string):Promise<{publicKeyPem:string}>;
   signUtf8(alias:string,message:string):Promise<string>;
   sha256Utf8(value:string):Promise<string>;
+  deleteKey(alias:string):Promise<void>;
 }
 
 export function createAndroidInstallationKeyProvider(native:NativeInstallationKeys=NativeModules.YunoteInstallationKeys):InstallationKeyProvider {
@@ -18,6 +20,7 @@ export function createAndroidInstallationKeyProvider(native:NativeInstallationKe
     ensureKey:alias=>native.ensureKey(alias),
     signUtf8:(alias,message)=>native.signUtf8(alias,message),
     sha256Utf8:value=>native.sha256Utf8(value),
+    deleteKey:alias=>native.deleteKey(alias),
   };
 }
 
@@ -37,5 +40,6 @@ export function createInMemoryInstallationKeyProvider(options:{create:(alias:str
     async sha256Utf8(){
       throw new Error('No SHA-256 implementation was supplied for the in-memory key provider');
     },
+    async deleteKey(alias){keys.delete(alias);},
   };
 }

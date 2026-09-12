@@ -81,6 +81,7 @@ describe('processTransportMessage', () => {
           pairingToken:'a'.repeat(64),pairingExpiresAt:'2026-09-12T12:02:00.000Z',cloudBaseUrl:'https://cloud.example',
         });},
         flushIfEnrolled:async()=>false,
+        unlink:async()=>{},
       }},
     );
     order.push(...acknowledged.map(()=> 'ack'));
@@ -94,7 +95,7 @@ describe('processTransportMessage', () => {
       {transferId:'secure-link-fail',kind:'linked',payloadJson:JSON.stringify({
         pairingToken:'b'.repeat(64),pairingExpiresAt:'2026-09-12T12:02:00.000Z',cloudBaseUrl:'https://cloud.example',
       })},
-      {db,transport,installationSync:{enrollAndFlush:async()=>{throw new Error('offline');},flushIfEnrolled:async()=>false}},
+      {db,transport,installationSync:{enrollAndFlush:async()=>{throw new Error('offline');},flushIfEnrolled:async()=>false,unlink:async()=>{}}},
     )).rejects.toThrow('offline');
     expect(acknowledged).toEqual([]);
     expect(sent).toEqual([]);
@@ -104,7 +105,7 @@ describe('processTransportMessage', () => {
     let directFlushes=0;
     await processTransportMessage({transferId:'direct-action-1',kind:'structured-action',payloadJson:JSON.stringify({
       verb:'Capture',targetType:'note',targetId:'direct-note-1',title:'Прямо',content:'В облако',
-    })},{db,transport,installationSync:{enrollAndFlush:async()=>{},flushIfEnrolled:async()=>{directFlushes++;return true;}}});
+    })},{db,transport,installationSync:{enrollAndFlush:async()=>{},flushIfEnrolled:async()=>{directFlushes++;return true;},unlink:async()=>{}}});
     expect(directFlushes).toBe(1);
     expect(sent.some(message=>message.kind==='sync-push')).toBe(false);
     expect((await db.execute("SELECT title FROM notes WHERE id='direct-note-1'")).rows).toEqual([{title:'Прямо'}]);
@@ -113,8 +114,19 @@ describe('processTransportMessage', () => {
   it('keeps an applied structured action journaled when direct upload is offline',async()=>{
     await expect(processTransportMessage({transferId:'offline-action-1',kind:'structured-action',payloadJson:JSON.stringify({
       verb:'Capture',targetType:'note',targetId:'offline-note-1',title:'Локально',content:'Ждёт сеть',
-    })},{db,transport,installationSync:{enrollAndFlush:async()=>{},flushIfEnrolled:async()=>{throw new Error('offline');}}})).rejects.toThrow('offline');
+    })},{db,transport,installationSync:{enrollAndFlush:async()=>{},flushIfEnrolled:async()=>{throw new Error('offline');},unlink:async()=>{}}})).rejects.toThrow('offline');
     expect((await db.execute("SELECT title FROM notes WHERE id='offline-note-1'")).rows).toEqual([{title:'Локально'}]);
     expect((await db.execute("SELECT COUNT(*) AS count FROM mutation_journal")).rows).toEqual([{count:1}]);
+  });
+
+  it('removes local installation authority before acknowledging unlink',async()=>{
+    let unlinked=false;
+    const guardedTransport:LocalTransport={...transport,acknowledge:async transferId=>{
+      expect(unlinked).toBe(true);acknowledged.push(transferId);
+    }};
+    await processTransportMessage({transferId:'unlink-1',kind:'unlinked',payloadJson:'{}'},{db,transport:guardedTransport,installationSync:{
+      enrollAndFlush:async()=>{},flushIfEnrolled:async()=>false,unlink:async()=>{unlinked=true;},
+    }});
+    expect(acknowledged).toEqual(['unlink-1']);
   });
 });

@@ -12,6 +12,7 @@ export interface SecureLinkHandoff {
 export interface InstallationSync {
   enrollAndFlush(input:SecureLinkHandoff):Promise<void>;
   flushIfEnrolled():Promise<boolean>;
+  unlink():Promise<void>;
 }
 
 interface StoredEndpointRow {status:string;cloud_base_url:string|null}
@@ -52,6 +53,13 @@ export function createInstallationSync(db:OpSqliteDb,keyProvider?:InstallationKe
       if(!row||row.status!=='enrolled'||typeof row.cloud_base_url!=='string')return false;
       await schedule(row.cloud_base_url);
       return true;
+    },
+    async unlink(){
+      const row=(await db.execute('SELECT key_alias FROM installation_identity WHERE singleton=1')).rows?.[0] as {key_alias:string}|undefined;
+      await db.execute('DELETE FROM installation_identity WHERE singleton=1');
+      if(row){
+        try{await keys().deleteKey?.(row.key_alias);}catch{/* Server revocation and deleted metadata already removed authority. */}
+      }
     },
   };
 }
