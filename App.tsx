@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  NativeModules,
   Pressable,
-  SafeAreaView,
   StatusBar,
   StyleSheet,
   Text,
@@ -28,6 +28,13 @@ export default function App({ bootstrap = createAppStores }: AppProps) {
   const [startupError, setStartupError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [tab, setTab] = useState<Tab>('notes');
+
+  useEffect(() => {
+    const systemBars = NativeModules.SystemBars as
+      | { setNavigationBarStyle(color: string, darkIcons: boolean): void }
+      | undefined;
+    systemBars?.setNavigationBarStyle(palette.navigationBar, mode === 'light');
+  }, [mode, palette.navigationBar]);
 
   const retry = useCallback(() => {
     setStartupError(null);
