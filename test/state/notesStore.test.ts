@@ -87,4 +87,16 @@ describe('notes store', () => {
 
     expect(store.getState().notes).toEqual([]);
   });
+
+  it('requests sync after the local UI update without waiting for the network',async()=>{
+    let finishSync!:()=>void;
+    const pending=new Promise<void>(resolve=>{finishSync=resolve;});
+    const requestSync=jest.fn(()=>pending);
+    const store=createNotesStore(db,requestSync);
+    const created=await store.getState().createNote({title:'Сразу локально',content:'Офлайн'});
+    expect(created.title).toBe('Сразу локально');
+    expect(store.getState().notes.map(note=>note.title)).toEqual(['Сразу локально']);
+    expect(requestSync).toHaveBeenCalledTimes(1);
+    finishSync();
+  });
 });

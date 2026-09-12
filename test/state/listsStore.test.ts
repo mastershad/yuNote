@@ -74,4 +74,15 @@ describe('lists store', () => {
 
     expect(store.getState().lists.map((l) => l.id)).toEqual([listA.id, listB.id]);
   });
+
+  it('requests non-blocking sync after each successful list mutation',async()=>{
+    const requestSync=jest.fn(()=>new Promise<void>(()=>{}));
+    const store=createListsStore(db,requestSync);
+    const list=await store.getState().createList('Покупки');
+    const item=await store.getState().addItem(list.id,'Хлеб');
+    await store.getState().toggleItem(list.id,item.id);
+    await store.getState().removeItem(list.id,item.id);
+    await store.getState().deleteList(list.id);
+    expect(requestSync).toHaveBeenCalledTimes(5);
+  });
 });

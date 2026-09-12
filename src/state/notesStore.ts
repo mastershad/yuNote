@@ -18,7 +18,10 @@ interface NotesState {
   deleteNote(id: string): Promise<void>;
 }
 
-export function createNotesStore(db: OpSqliteDb): UseBoundStore<StoreApi<NotesState>> {
+export function createNotesStore(db: OpSqliteDb,onLocalMutation?:()=>void|Promise<void>): UseBoundStore<StoreApi<NotesState>> {
+  const notify=()=>{
+    try{void Promise.resolve(onLocalMutation?.()).catch(()=>{});}catch{/* Local persistence already succeeded; a later trigger retries sync. */}
+  };
   return create<NotesState>((set, get) => ({
     notes: [],
     lastLoadOptions: undefined,
@@ -34,6 +37,7 @@ export function createNotesStore(db: OpSqliteDb): UseBoundStore<StoreApi<NotesSt
       } else {
         set({ notes: [note, ...get().notes] });
       }
+      notify();
       return note;
     },
     async updateNote(id, patch) {
@@ -44,6 +48,7 @@ export function createNotesStore(db: OpSqliteDb): UseBoundStore<StoreApi<NotesSt
       } else {
         set({ notes: get().notes.map((n) => (n.id === id ? updated : n)) });
       }
+      notify();
       return updated;
     },
     async deleteNote(id) {
@@ -54,6 +59,7 @@ export function createNotesStore(db: OpSqliteDb): UseBoundStore<StoreApi<NotesSt
       } else {
         set({ notes: get().notes.filter((n) => n.id !== id) });
       }
+      notify();
     },
   }));
 }

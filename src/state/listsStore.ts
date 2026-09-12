@@ -24,7 +24,10 @@ interface ListsState {
   removeItem(listId: string, itemId: string): Promise<void>;
 }
 
-export function createListsStore(db: OpSqliteDb): UseBoundStore<StoreApi<ListsState>> {
+export function createListsStore(db: OpSqliteDb,onLocalMutation?:()=>void|Promise<void>): UseBoundStore<StoreApi<ListsState>> {
+  const notify=()=>{
+    try{void Promise.resolve(onLocalMutation?.()).catch(()=>{});}catch{/* Local persistence already succeeded; a later trigger retries sync. */}
+  };
   return create<ListsState>((set, get) => ({
     lists: [],
     itemsByListId: {},
@@ -37,12 +40,14 @@ export function createListsStore(db: OpSqliteDb): UseBoundStore<StoreApi<ListsSt
       // Reload from the repository rather than prepending locally, so the
       // slice reflects listLists' actual order (updated_at DESC).
       set({ lists: await listLists(db) });
+      notify();
       return list;
     },
     async deleteList(id) {
       await repoDeleteList(db, id);
       const { [id]: _removed, ...rest } = get().itemsByListId;
       set({ lists: await listLists(db), itemsByListId: rest });
+      notify();
     },
     async loadItems(listId) {
       const items = await listItemsForList(db, listId);
@@ -52,6 +57,7 @@ export function createListsStore(db: OpSqliteDb): UseBoundStore<StoreApi<ListsSt
       const item = await addListItem(db, listId, text);
       const items = await listItemsForList(db, listId);
       set({ itemsByListId: { ...get().itemsByListId, [listId]: items } });
+      notify();
       return item;
     },
     async toggleItem(listId, itemId) {
@@ -60,11 +66,13 @@ export function createListsStore(db: OpSqliteDb): UseBoundStore<StoreApi<ListsSt
       await updateListItem(db, itemId, { checked: !current?.checked });
       const items = await listItemsForList(db, listId);
       set({ itemsByListId: { ...get().itemsByListId, [listId]: items } });
+      notify();
     },
     async removeItem(listId, itemId) {
       await deleteListItem(db, itemId);
       const items = await listItemsForList(db, listId);
       set({ itemsByListId: { ...get().itemsByListId, [listId]: items } });
+      notify();
     },
   }));
 }

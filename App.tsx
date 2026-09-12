@@ -51,6 +51,7 @@ export default function App({ bootstrap = createAppStores }: AppProps) {
         opened = value;
         if (active) {
           setStores(value);
+          value.requestSync();
         } else {
           value.close();
         }
@@ -78,6 +79,7 @@ export default function App({ bootstrap = createAppStores }: AppProps) {
       ]).catch(() => {
         // The next explicit screen action will retry; keep the current local view usable.
       });
+      stores.requestSync();
     });
     return () => subscription.remove();
   }, [stores]);

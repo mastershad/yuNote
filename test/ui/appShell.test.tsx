@@ -23,7 +23,7 @@ function fakeStores(): AppStores {
     toggleItem: jest.fn(),
     removeItem: jest.fn(),
   }));
-  return { notes, lists, close: jest.fn() } as unknown as AppStores;
+  return { notes, lists, requestSync:jest.fn(), close: jest.fn() } as unknown as AppStores;
 }
 
 describe('App shell', () => {
@@ -61,6 +61,12 @@ describe('App shell', () => {
 
     expect(tree.root.findByProps({ testID: 'notes-screen' })).toBeTruthy();
     expect(bootstrap).toHaveBeenCalledTimes(2);
+  });
+
+  it('requests a non-blocking journal flush after bootstrap',async()=>{
+    const stores=fakeStores();
+    await act(async()=>{TestRenderer.create(<App bootstrap={async()=>stores}/>);});
+    expect(stores.requestSync).toHaveBeenCalledTimes(1);
   });
 });
 
