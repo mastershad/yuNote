@@ -1,59 +1,48 @@
 package com.yunote.app.transport
 
-import android.app.NotificationChannel
-import android.app.NotificationManager
 import android.content.Intent
-import android.os.Build
-import androidx.core.app.NotificationCompat
+import android.os.Handler
+import android.os.IBinder
+import android.os.Looper
+import android.os.Message
+import android.os.Messenger
 import com.facebook.react.HeadlessJsTaskService
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.jstasks.HeadlessJsTaskConfig
-import com.yunote.app.R
 
 class YunoteTransportService : HeadlessJsTaskService() {
-  override fun onCreate() {
-    super.onCreate()
-    val manager = getSystemService(NotificationManager::class.java)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-      manager.createNotificationChannel(
-          NotificationChannel(CHANNEL_ID, "yuNote background actions", NotificationManager.IMPORTANCE_LOW)
-      )
+  private val messenger = Messenger(IncomingHandler())
+
+  override fun onBind(intent: Intent): IBinder = messenger.binder
+
+  private inner class IncomingHandler : Handler(Looper.getMainLooper()) {
+    override fun handleMessage(message: Message) {
+      if (message.what != MESSAGE_DELIVER) {
+        super.handleMessage(message)
+        return
+      }
+      val transferId = message.data.getString("transferId") ?: return
+      val kind = message.data.getString("kind") ?: return
+      startTask(taskConfig(transferId, kind, message.data.getString("payloadJson")))
     }
-    val notification =
-        NotificationCompat.Builder(this, CHANNEL_ID)
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("yuNote")
-            .setContentText("Обрабатываем защищённый запрос")
-            .setSilent(true)
-            .setOngoing(true)
-            .build()
-    startForeground(NOTIFICATION_ID, notification)
   }
 
   override fun getTaskConfig(intent: Intent?): HeadlessJsTaskConfig? {
     val transferId = intent?.getStringExtra("transferId") ?: return null
     val kind = intent.getStringExtra("kind") ?: return null
+    return taskConfig(transferId, kind, intent.getStringExtra("payloadJson"))
+  }
+
+  private fun taskConfig(transferId: String, kind: String, payloadJson: String?): HeadlessJsTaskConfig {
     val data = Arguments.createMap().apply {
       putString("transferId", transferId)
       putString("kind", kind)
-      intent.getStringExtra("payloadJson")?.let { putString("payloadJson", it) }
+      payloadJson?.let { putString("payloadJson", it) }
     }
     return HeadlessJsTaskConfig("YunoteTransportTask", data, 60_000, true)
   }
 
-  override fun onDestroy() {
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-      stopForeground(STOP_FOREGROUND_REMOVE)
-    } else {
-      @Suppress("DEPRECATION")
-      stopForeground(true)
-    }
-    super.onDestroy()
-  }
-
   companion object {
-    private const val CHANNEL_ID = "yunote_local_transport"
-    private const val NOTIFICATION_ID = 7301
+    const val MESSAGE_DELIVER = 1
   }
 }
-
