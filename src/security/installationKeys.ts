@@ -24,7 +24,10 @@ export function createAndroidInstallationKeyProvider(native:NativeInstallationKe
   };
 }
 
-export function createInMemoryInstallationKeyProvider(options:{create:(alias:string)=>{publicKeyPem:string;sign:(message:string)=>string|Promise<string>}}):InstallationKeyProvider {
+export function createInMemoryInstallationKeyProvider(options:{
+  create:(alias:string)=>{publicKeyPem:string;sign:(message:string)=>string|Promise<string>};
+  sha256Utf8?:(value:string)=>string|Promise<string>;
+}):InstallationKeyProvider {
   const keys=new Map<string,{publicKeyPem:string;sign:(message:string)=>string|Promise<string>}>();
   return {
     async ensureKey(alias){
@@ -37,8 +40,9 @@ export function createInMemoryInstallationKeyProvider(options:{create:(alias:str
       if(!key)throw new Error(`Installation key is missing: ${alias}`);
       return key.sign(message);
     },
-    async sha256Utf8(){
-      throw new Error('No SHA-256 implementation was supplied for the in-memory key provider');
+    async sha256Utf8(value){
+      if(!options.sha256Utf8)throw new Error('No SHA-256 implementation was supplied for the in-memory key provider');
+      return options.sha256Utf8(value);
     },
     async deleteKey(alias){keys.delete(alias);},
   };

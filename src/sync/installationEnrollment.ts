@@ -32,6 +32,15 @@ function rowToMetadata(row:Record<string,unknown>):EnrollmentMetadata {
     generation:row.generation as number,appliedRevision:row.applied_revision as number,cloudBaseUrl:row.cloud_base_url as string|null};
 }
 
+async function localSnapshotJson(db:OpSqliteDb):Promise<string>{
+  const classes=(await db.execute('SELECT id,name,rev,created_at AS createdAt,updated_at AS updatedAt,position FROM classes ORDER BY position,id')).rows??[];
+  const notes=(await db.execute('SELECT id,title,content,class_id AS classId,rev,created_at AS createdAt,updated_at AS updatedAt,position FROM notes ORDER BY position,id')).rows??[];
+  const lists=(await db.execute('SELECT id,title,class_id AS classId,rev,created_at AS createdAt,updated_at AS updatedAt,position FROM lists ORDER BY position,id')).rows??[];
+  const itemRows=(await db.execute('SELECT id,list_id AS listId,text,checked,rev,created_at AS createdAt,updated_at AS updatedAt,position FROM list_items ORDER BY position,id')).rows??[];
+  const listItems=itemRows.map(row=>({...row,checked:row.checked===1}));
+  return JSON.stringify({schemaVersion:1,classes,notes,lists,listItems});
+}
+
 export function createInstallationEnrollmentClient(deps:{db:OpSqliteDb;keyProvider:InstallationKeyProvider;baseUrl:string;request?:EnrollmentRequest;generateId?:()=>string;now?:()=>string}) {
   if(!/^https:\/\//i.test(deps.baseUrl))throw new Error('Installation enrollment requires an HTTPS endpoint');
   const request:EnrollmentRequest=deps.request??(async(url,init)=>fetch(url,init));
@@ -62,8 +71,12 @@ export function createInstallationEnrollmentClient(deps:{db:OpSqliteDb;keyProvid
         throw new Error('Pending installation is bound to a different cloud endpoint');
       }
       const {publicKeyPem}=await deps.keyProvider.ensureKey(metadata.keyAlias);
+      const dataset=(await deps.db.execute('SELECT revision FROM dataset_state WHERE singleton = 1')).rows?.[0];
+      if(!dataset||typeof dataset.revision!=='number')throw new Error('Local dataset revision is unavailable');
+      const snapshotHash=await deps.keyProvider.sha256Utf8(await localSnapshotJson(deps.db));
       const response=await request(`${baseUrl}/yunote/installations/enroll`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({
         token,installationId:metadata.installationId,publicKeyPem,keyVersion:metadata.keyVersion,replicaId:metadata.replicaId,generation:metadata.generation,
+        datasetRevision:dataset.revision,snapshotHash,
       })});
       const reply=parseReply(await response.json());
       if(response.status!==201||!reply)throw new Error(`Installation enrollment failed with status ${response.status}`);
