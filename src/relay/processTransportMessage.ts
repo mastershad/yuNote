@@ -3,6 +3,7 @@ import { registerActionDispatcher } from './actionDispatcher';
 import type { LocalTransport, LocalTransportMessage } from './localTransport';
 import { flushOutbox, registerSyncHandlers } from '../sync/outbox';
 import { AndroidOutboundTransport } from './androidOutboundTransport';
+import {createInstallationSync,type InstallationSync,type SecureLinkHandoff} from '../sync/installationSync';
 
 export interface TransportTaskInput {
   transferId: string;
@@ -13,6 +14,16 @@ export interface TransportTaskInput {
 export interface TransportTaskDependencies {
   db: OpSqliteDb;
   transport: LocalTransport;
+  installationSync?:InstallationSync;
+}
+
+function secureLinkHandoff(message:LocalTransportMessage):SecureLinkHandoff|undefined {
+  if(message.kind!=='linked')return undefined;
+  const value=message.small??{};
+  const fields=[value.pairingToken,value.pairingExpiresAt,value.cloudBaseUrl];
+  if(fields.every(field=>field===undefined))return undefined;
+  if(fields.some(field=>typeof field!=='string'))throw new Error('Secure yuNote link handoff is malformed');
+  return {pairingToken:value.pairingToken as string,pairingExpiresAt:value.pairingExpiresAt as string,cloudBaseUrl:value.cloudBaseUrl as string};
 }
 
 function decodeMessage(input: TransportTaskInput): LocalTransportMessage {
@@ -37,6 +48,7 @@ export async function processTransportMessage(
   const ownedDb = dependencies ? null : await openMigratedDatabase({ name: 'yunote.sqlite', location: 'default' });
   const db = dependencies?.db ?? ownedDb!;
   const outbound = dependencies?.transport ?? new AndroidOutboundTransport();
+  const installationSync=dependencies?.installationSync??createInstallationSync(db);
   const handlers = new Set<(message: LocalTransportMessage) => Promise<void>>();
   const dispatchTransport: LocalTransport = {
     send: message => outbound.send(message),
@@ -52,10 +64,19 @@ export async function processTransportMessage(
   const message = decodeMessage(input);
 
   try {
+    const handoff=secureLinkHandoff(message);
+    if(handoff){
+      await installationSync.enrollAndFlush(handoff);
+      await outbound.acknowledge(message.transferId);
+      return;
+    }
     for (const handler of handlers) {
       await handler(message);
     }
-    if (message.kind === 'structured-action' || message.kind === 'linked') {
+    if(message.kind==='structured-action'){
+      const uploadedDirectly=await installationSync.flushIfEnrolled();
+      if(!uploadedDirectly)await flushOutbox(db,outbound);
+    }else if(message.kind==='linked'){
       await flushOutbox(db, outbound);
     }
   } finally {

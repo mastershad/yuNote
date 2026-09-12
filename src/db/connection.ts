@@ -181,6 +181,15 @@ const migrations: Migration[] = [
       )`);
     },
   },
+  {
+    version: 5,
+    up: async (db) => {
+      // Persist the origin selected by the authenticated Key Fob handoff so
+      // background uploads after a process restart cannot depend on JS
+      // memory or on Key Fob still being open.
+      await db.execute('ALTER TABLE installation_identity ADD COLUMN cloud_base_url TEXT');
+    },
+  },
 ];
 
 export async function openMigratedDatabase(options: { name: string; location: string }): Promise<OpSqliteDb> {

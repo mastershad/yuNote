@@ -12,7 +12,7 @@ type EnrollmentRequest=(url:string,init:EnrollmentRequestInit)=>Promise<Enrollme
 
 export interface EnrollmentMetadata {
   status:'pending'|'enrolled';installationId:string;keyAlias:string;keyVersion:number;
-  bindingId:string|null;replicaId:string;generation:number;appliedRevision:number;
+  bindingId:string|null;replicaId:string;generation:number;appliedRevision:number;cloudBaseUrl:string|null;
 }
 
 interface EnrollmentReply {installationId:string;bindingId:string;replicaId:string;generation:number;keyVersion:number;appliedRevision:number}
@@ -29,7 +29,7 @@ function parseReply(value:unknown):EnrollmentReply|undefined {
 function rowToMetadata(row:Record<string,unknown>):EnrollmentMetadata {
   return {status:row.status as EnrollmentMetadata['status'],installationId:row.installation_id as string,keyAlias:row.key_alias as string,
     keyVersion:row.key_version as number,bindingId:row.binding_id as string|null,replicaId:row.replica_id as string,
-    generation:row.generation as number,appliedRevision:row.applied_revision as number};
+    generation:row.generation as number,appliedRevision:row.applied_revision as number,cloudBaseUrl:row.cloud_base_url as string|null};
 }
 
 export function createInstallationEnrollmentClient(deps:{db:OpSqliteDb;keyProvider:InstallationKeyProvider;baseUrl:string;request?:EnrollmentRequest;generateId?:()=>string;now?:()=>string}) {
@@ -39,7 +39,7 @@ export function createInstallationEnrollmentClient(deps:{db:OpSqliteDb;keyProvid
   const id=deps.generateId??generateId;const currentTime=deps.now??nowIso;
   return {
     async getMetadata():Promise<EnrollmentMetadata|undefined>{
-      const row=(await deps.db.execute('SELECT status,installation_id,key_alias,key_version,binding_id,replica_id,generation,applied_revision FROM installation_identity WHERE singleton = 1')).rows?.[0];
+      const row=(await deps.db.execute('SELECT status,installation_id,key_alias,key_version,binding_id,replica_id,generation,applied_revision,cloud_base_url FROM installation_identity WHERE singleton = 1')).rows?.[0];
       return row?rowToMetadata(row):undefined;
     },
     async enroll(token:string):Promise<EnrollmentMetadata>{
@@ -52,9 +52,14 @@ export function createInstallationEnrollmentClient(deps:{db:OpSqliteDb;keyProvid
         const installationId=id();if(!UUID.test(installationId))throw new Error('Generated installation id is invalid');
         const keyAlias=`yunote-installation-${installationId}`;
         await deps.db.execute(`INSERT INTO installation_identity
-          (singleton,status,installation_id,key_alias,key_version,binding_id,replica_id,generation,applied_revision,created_at,enrolled_at)
-          VALUES (1,'pending',?,?,1,NULL,?,?,0,?,NULL)`,[installationId,keyAlias,dataset.replica_id,dataset.generation,currentTime()]);
-        metadata={status:'pending',installationId,keyAlias,keyVersion:1,bindingId:null,replicaId:dataset.replica_id,generation:dataset.generation,appliedRevision:0};
+          (singleton,status,installation_id,key_alias,key_version,binding_id,replica_id,generation,applied_revision,created_at,enrolled_at,cloud_base_url)
+          VALUES (1,'pending',?,?,1,NULL,?,?,0,?,NULL,?)`,[installationId,keyAlias,dataset.replica_id,dataset.generation,currentTime(),baseUrl]);
+        metadata={status:'pending',installationId,keyAlias,keyVersion:1,bindingId:null,replicaId:dataset.replica_id,generation:dataset.generation,appliedRevision:0,cloudBaseUrl:baseUrl};
+      } else if(metadata.cloudBaseUrl===null) {
+        await deps.db.execute("UPDATE installation_identity SET cloud_base_url=? WHERE singleton=1 AND status='pending' AND cloud_base_url IS NULL",[baseUrl]);
+        metadata={...metadata,cloudBaseUrl:baseUrl};
+      } else if(metadata.cloudBaseUrl!==baseUrl) {
+        throw new Error('Pending installation is bound to a different cloud endpoint');
       }
       const {publicKeyPem}=await deps.keyProvider.ensureKey(metadata.keyAlias);
       const response=await request(`${baseUrl}/yunote/installations/enroll`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({

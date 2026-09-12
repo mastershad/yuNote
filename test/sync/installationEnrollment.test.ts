@@ -19,8 +19,8 @@ describe('installation enrollment client',()=>{
     try{
       await expect(client.enroll('a'.repeat(64))).resolves.toMatchObject({status:'enrolled',bindingId:'binding-1'});
       expect(observed[0]).toMatchObject({token:'a'.repeat(64),installationId:'11111111-1111-4111-8111-111111111111',replicaId:expect.stringMatching(/^[0-9a-f]{32}$/),generation:1,keyVersion:1});
-      expect((await db.execute('SELECT status,installation_id,key_alias,key_version,binding_id,applied_revision FROM installation_identity')).rows).toEqual([
-        {status:'enrolled',installation_id:'11111111-1111-4111-8111-111111111111',key_alias:'yunote-installation-11111111-1111-4111-8111-111111111111',key_version:1,binding_id:'binding-1',applied_revision:0},
+      expect((await db.execute('SELECT status,installation_id,key_alias,key_version,binding_id,applied_revision,cloud_base_url FROM installation_identity')).rows).toEqual([
+        {status:'enrolled',installation_id:'11111111-1111-4111-8111-111111111111',key_alias:'yunote-installation-11111111-1111-4111-8111-111111111111',key_version:1,binding_id:'binding-1',applied_revision:0,cloud_base_url:'https://cloud.example'},
       ]);
     }finally{db.close();}
   });
