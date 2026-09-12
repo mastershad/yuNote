@@ -34,7 +34,7 @@ describe('local journal migration v3', () => {
     let firstState:Record<string,unknown>|undefined;
     try {
       const { rows:version } = await db.execute('SELECT * FROM pragma_user_version()');
-      expect(version?.[0]?.user_version).toBe(4);
+      expect(version?.[0]?.user_version).toBe(5);
       expect((await db.execute('SELECT id,name,rev,created_at,updated_at,position FROM classes')).rows).toEqual([
         { id:'c', name:'Работа', rev:1, created_at:timestamp, updated_at:timestamp, position:0 },
       ]);
