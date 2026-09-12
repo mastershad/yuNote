@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { createAppStores, type AppStores } from './src/app/stores';
+import { NotesScreen } from './src/ui/NotesScreen';
 import { getThemePalette, type ThemePalette } from './src/ui/theme';
 
 type Tab = 'notes' | 'lists';
@@ -58,7 +59,7 @@ export default function App({ bootstrap = createAppStores }: AppProps) {
   }, [bootstrap, attempt]);
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <View style={styles.safeArea}>
       <StatusBar
         barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
         backgroundColor={palette.statusBar}
@@ -117,7 +118,7 @@ export default function App({ bootstrap = createAppStores }: AppProps) {
           </View>
         </View>
       ) : null}
-    </SafeAreaView>
+    </View>
   );
 }
 
