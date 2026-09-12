@@ -1,5 +1,6 @@
 const { readFileSync } = require('fs') as { readFileSync(path: string, encoding: string): string };
 const { resolve } = require('path') as { resolve(...parts: string[]): string };
+export {};
 
 function read(relativePath: string): string {
   return readFileSync(resolve(__dirname, '..', '..', relativePath), 'utf8');
@@ -20,4 +21,3 @@ describe('Android display contract', () => {
     expect(module).toContain('BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE');
   });
 });
-

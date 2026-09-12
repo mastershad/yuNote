@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   NativeModules,
   Pressable,
   StatusBar,
@@ -65,6 +66,21 @@ export default function App({ bootstrap = createAppStores }: AppProps) {
       opened?.close();
     };
   }, [bootstrap, attempt]);
+
+  useEffect(() => {
+    if (!stores) return;
+    const subscription = AppState.addEventListener('change', nextState => {
+      if (nextState !== 'active') return;
+      const noteOptions = stores.notes.getState().lastLoadOptions ?? { sort: 'date-desc' as const };
+      void Promise.all([
+        stores.notes.getState().loadNotes(noteOptions),
+        stores.lists.getState().loadLists(),
+      ]).catch(() => {
+        // The next explicit screen action will retry; keep the current local view usable.
+      });
+    });
+    return () => subscription.remove();
+  }, [stores]);
 
   return (
     <View style={styles.safeArea}>
@@ -172,4 +188,3 @@ function createStyles(p: ThemePalette) {
     tabBar: { flexDirection: 'row', borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: p.border, backgroundColor: p.surface, paddingBottom: 4 },
   });
 }
-
