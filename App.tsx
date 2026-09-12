@@ -93,17 +93,9 @@ export default function App({ bootstrap = createAppStores }: AppProps) {
         <View style={styles.app}>
           <View style={styles.content}>
             {tab === 'notes' ? (
-              <View testID="notes-screen" style={styles.placeholder}>
-                <Text style={styles.eyebrow}>YUNOTE</Text>
-                <Text style={styles.title}>Заметки</Text>
-                <Text style={styles.muted}>Ваши мысли всегда рядом.</Text>
-              </View>
+              <NotesScreen store={stores.notes} palette={palette} />
             ) : (
-              <View testID="lists-screen" style={styles.placeholder}>
-                <Text style={styles.eyebrow}>YUNOTE</Text>
-                <Text style={styles.title}>Списки</Text>
-                <Text style={styles.muted}>Планы, покупки и важные дела.</Text>
-              </View>
+              <ListsScreen store={stores.lists} palette={palette} />
             )}
           </View>
           <View style={styles.tabBar}>

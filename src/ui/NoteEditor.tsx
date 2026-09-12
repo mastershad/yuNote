@@ -4,7 +4,6 @@ import {
   Alert,
   Modal,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   TextInput,
