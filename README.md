@@ -1,43 +1,76 @@
 # yuNote
 
-Standalone, offline-first Notes/Lists mobile app — works with zero account,
-zero network, and zero Key Fob dependency until explicitly linked. Native
-ecosystem product for [Key Fob](https://github.com/mastershad/IoT-Key-Fob-Project);
-see that repo for the platform/account layer and cloud-sync design.
+Самостоятельное offline-first приложение заметок и списков для Android. Без явной привязки оно работает без аккаунта, сети и Key Fob. После привязки принимает структурированные действия от Key Fob в фоне и напрямую синхронизирует локальный журнал с Cloud Platform.
 
-## Status (2026-09-07)
+Платформенная архитектура, сервер и n8n находятся в репозитории [IoT-Key-Fob-Project](https://github.com/mastershad/IoT-Key-Fob-Project).
 
-**Local data layer — shipped, on `main`.** React Native + `@op-engineering/op-sqlite`.
-SQLite schema (`notes`/`lists`/`list_items`/`classes` — `classes` is a purely
-local organizational feature, structurally excluded from ever syncing
-anywhere), atomic `PRAGMA user_version` migrations, repository functions,
-Zustand stores. 41 tests passing, `tsc --noEmit` clean. Design:
-`docs/superpowers/specs/2026-09-07-yunote-local-app-design.md`.
+## Состояние на 13 сентября 2026 года
 
-**Not started yet:**
-- **Screens/gestures** (Notes/Lists tabs, long-press menu, drag-to-create-class,
-  swipe-to-delete) — deliberately deferred, waiting on a visual design pass.
-  No native `android/`/`ios/` project scaffolding exists yet either.
-- **Cloud sync** — the design is settled
-  (`IoT-Key-Fob-Project`'s `docs/superpowers/specs/2026-09-07-yunote-cloud-layer-design.md`)
-  and an implementation plan is written
-  (`IoT-Key-Fob-Project`'s `docs/superpowers/plans/2026-09-07-yunote-cloud-layer-implementation.md`),
-  but that plan lives entirely in `cloud-platform` (the other repo) and
-  hasn't been executed yet. This repo's own client-side push code (calling
-  the new `/yunote/sync/*` endpoints once they exist) is not yet written
-  either — it depends on that plan landing first.
+Реализовано:
 
-## Repo layout
+- React Native Android-приложение с портретной ориентацией, светлой и тёмной темами;
+- рабочий UI заметок и списков;
+- SQLite ЛБД через `@op-engineering/op-sqlite`;
+- заметки, списки, элементы, классы, связи с классами и сохраняемый порядок;
+- атомарные dataset revisions и immutable mutation journal;
+- идемпотентные локальные операции по `operationId`;
+- Android bound service для защищённых сообщений Key Fob;
+- Headless JS выполнение при закрытом UI и заблокированном телефоне;
+- P-256 installation key в Android Keystore;
+- enrollment через одноразовый pairing token;
+- подписанная прямая синхронизация ЛБД→ОБД по HTTPS;
+- локальная работа без сети и повтор sync при следующем lifecycle/action trigger;
+- удаление локальных полномочий и Keystore key при unlink без удаления заметок.
 
-- `src/db/` — SQLite connection + migrations
-- `src/data/` — repository functions (classes/notes/lists)
-- `src/state/` — Zustand stores
-- `docs/superpowers/specs/` and `docs/superpowers/plans/` — design/implementation records (this project's convention, shared with `IoT-Key-Fob-Project`)
+Не реализовано:
 
-## Development
+- управляемое полное восстановление ОБД→ЛБД;
+- разрешение конфликтов нескольких writers;
+- гарантированный периодический retry через Android WorkManager;
+- iOS;
+- физический брелок и ограничения опасных команд;
+- production signing key для публичного APK.
 
-```bash
+Подробности клиентской реализации: [docs/TRANSPORT_AND_SYNC.md](docs/TRANSPORT_AND_SYNC.md).
+
+## Структура
+
+- `src/db/`: соединение и миграции SQLite;
+- `src/data/`: транзакционные операции и mutation journal;
+- `src/state/`: Zustand stores и локальные mutation triggers;
+- `src/relay/`: получение действий и совместимость с legacy relay;
+- `src/security/`: интерфейс Android installation key;
+- `src/sync/`: enrollment, batching, signing и direct sync coordinator;
+- `src/ui/`: заметки, списки и темы;
+- `android/`: Activity, Headless service, Keystore и native modules;
+- `test/`: unit/integration tests;
+- `docs/superpowers/`: исторические спецификации и планы.
+
+## Разработка
+
+Требуется Node.js 22.11 или новее и настроенный Android SDK/JDK.
+
+```powershell
 npm install
-npm test        # jest, 41 tests
+npm test -- --runInBand
 npm run typecheck
+cd android
+.\gradlew.bat assembleRelease
 ```
+
+Установка:
+
+```powershell
+adb install -r --no-streaming android\app\build\outputs\apk\release\app-release.apk
+```
+
+Release-вариант текущего контрольного этапа подписан отладочным сертификатом, общим с Key Fob, чтобы Android signature permission разрешал IPC. Для публичного выпуска требуется отдельная production signing strategy.
+
+## Основные гарантии
+
+- Сеть не участвует в commit локальной операции.
+- Данные, dataset revision, результат и journal events записываются атомарно.
+- Revision не дробится между сетевыми пакетами.
+- Локальный applied cursor сдвигается только после точного server acknowledgement.
+- Private installation key не экспортируется из Android Keystore.
+- Unlink удаляет полномочия, но сохраняет ЛБД и журнал.
