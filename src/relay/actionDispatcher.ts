@@ -4,6 +4,7 @@ import { createNoteInTransaction,updateNoteInTransaction,deleteNoteInTransaction
 import { createListInTransaction,addListItemInTransaction,updateListItemInTransaction,deleteListItemInTransaction } from '../data/lists';
 import { runLocalOperation } from '../data/localOperation';
 import { generateId } from '../data/id';
+import {applyCollaborativeListOperation,findCollaborativeList} from '../data/collaborativeListOperations';
 
 export interface StructuredAction {
   verb: 'Capture' | 'Modify' | 'Remove' | 'Complete' | 'Clear';
@@ -18,11 +19,23 @@ export interface StructuredAction {
 
 export type ActionDispatchResult = { status: 'applied' } | { status: 'failed'; reason: string };
 
+async function applyCollaborativeAction(db:OpSqliteDb,action:StructuredAction,operationId:string,list:{id:string;collaboration_role:string}):Promise<ActionDispatchResult>{
+  if(list.collaboration_role==='viewer')return {status:'failed',reason:`${list.id}: collaboration role is read-only`};
+  const type=action.verb==='Capture'?'add_item':action.verb==='Modify'?'update_item':action.verb==='Complete'?'set_checked':'delete_item';
+  const payload:Record<string,unknown>={itemId:action.targetId};
+  if(type==='add_item'||type==='update_item')payload.text=action.content??'';
+  if(type==='set_checked')payload.checked=true;
+  await applyCollaborativeListOperation(db,{operationId,listId:list.id,type,payload});
+  return {status:'applied'};
+}
+
 export async function applyStructuredAction(db: OpSqliteDb, action: StructuredAction, operationId=generateId()): Promise<ActionDispatchResult> {
   const supported=(action.targetType==='note' && ['Capture','Modify','Remove','Clear'].includes(action.verb)) ||
     (action.targetType==='listItem' && ['Capture','Modify','Complete','Remove','Clear'].includes(action.verb));
   if (!supported) return { status:'failed',reason:`unsupported targetType/verb combination: ${action.targetType}/${action.verb}` };
   try {
+    const collaboration=action.targetType==='listItem'?await findCollaborativeList(db,action.verb==='Capture'?{listId:action.parentListId}:{itemId:action.targetId}):undefined;
+    if(collaboration)return await applyCollaborativeAction(db,action,operationId,collaboration);
     const outcome=await runLocalOperation(db,{ operationId,request:action,execute:async(tx)=>{
       const events=[];
       if (action.targetType==='note') {

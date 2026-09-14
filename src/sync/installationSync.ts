@@ -2,6 +2,8 @@ import type {OpSqliteDb} from '../db/connection';
 import {createAndroidInstallationKeyProvider,type InstallationKeyProvider} from '../security/installationKeys';
 import {createInstallationEnrollmentClient} from './installationEnrollment';
 import {createJournalUploader} from './journalUploader';
+import {createCollaborationInbox} from './collaborationInbox';
+import {createCollaborationOutbox} from './collaborationOutbox';
 
 export interface SecureLinkHandoff {
   pairingToken:string;
@@ -20,9 +22,21 @@ interface StoredEndpointRow {status:string;cloud_base_url:string|null}
 export function createInstallationSync(db:OpSqliteDb,keyProvider?:InstallationKeyProvider):InstallationSync {
   const keys=()=>keyProvider??createAndroidInstallationKeyProvider();
   const uploaders=new Map<string,ReturnType<typeof createJournalUploader>>();
+  const inboxes=new Map<string,ReturnType<typeof createCollaborationInbox>>();
+  const collaborationOutboxes=new Map<string,ReturnType<typeof createCollaborationOutbox>>();
   const uploader=(baseUrl:string)=>{
     let existing=uploaders.get(baseUrl);
     if(!existing){existing=createJournalUploader({db,keyProvider:keys(),baseUrl});uploaders.set(baseUrl,existing);}
+    return existing;
+  };
+  const inbox=(baseUrl:string)=>{
+    let existing=inboxes.get(baseUrl);
+    if(!existing){existing=createCollaborationInbox({db,keyProvider:keys(),baseUrl});inboxes.set(baseUrl,existing);}
+    return existing;
+  };
+  const collaborationOutbox=(baseUrl:string)=>{
+    let existing=collaborationOutboxes.get(baseUrl);
+    if(!existing){existing=createCollaborationOutbox({db,keyProvider:keys(),baseUrl});collaborationOutboxes.set(baseUrl,existing);}
     return existing;
   };
   let running:Promise<void>|undefined;
@@ -35,6 +49,11 @@ export function createInstallationSync(db:OpSqliteDb,keyProvider?:InstallationKe
           rerun=false;
           let outcome=await uploader(baseUrl).flush();
           while(outcome.status==='uploaded')outcome=await uploader(baseUrl).flush();
+          let outgoing=await collaborationOutbox(baseUrl).flush();
+          while(outgoing.status==='uploaded'||outgoing.status==='discarded')outgoing=await collaborationOutbox(baseUrl).flush();
+          let collaboration=await inbox(baseUrl).pollApplyAndAcknowledge();
+          while(collaboration.status==='applied')collaboration=await inbox(baseUrl).pollApplyAndAcknowledge();
+          if(outgoing.status==='conflict')rerun=true;
         }while(rerun);
       })().finally(()=>{running=undefined;});
     }

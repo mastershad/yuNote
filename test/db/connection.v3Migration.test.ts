@@ -34,7 +34,7 @@ describe('local journal migration v3', () => {
     let firstState:Record<string,unknown>|undefined;
     try {
       const { rows:version } = await db.execute('SELECT * FROM pragma_user_version()');
-      expect(version?.[0]?.user_version).toBe(5);
+      expect(version?.[0]?.user_version).toBe(6);
       expect((await db.execute('SELECT id,name,rev,created_at,updated_at,position FROM classes')).rows).toEqual([
         { id:'c', name:'Работа', rev:1, created_at:timestamp, updated_at:timestamp, position:0 },
       ]);
@@ -43,6 +43,9 @@ describe('local journal migration v3', () => {
       ]);
       expect((await db.execute('SELECT id,title,class_id,rev,position FROM lists')).rows).toEqual([
         { id:'l', title:'Покупки', class_id:null, rev:3, position:0 },
+      ]);
+      expect((await db.execute('SELECT id,purpose,sharing_mode,shared_revision,collaboration_role FROM lists')).rows).toEqual([
+        { id:'l', purpose:'generic', sharing_mode:'personal', shared_revision:null, collaboration_role:null },
       ]);
       expect((await db.execute('SELECT id,list_id,text,checked,rev,position FROM list_items')).rows).toEqual([
         { id:'i', list_id:'l', text:'Хлеб', checked:1, rev:2, position:0 },
@@ -53,6 +56,7 @@ describe('local journal migration v3', () => {
       expect((await db.execute('SELECT * FROM mutation_journal')).rows).toEqual([]);
       expect((await db.execute('SELECT * FROM applied_operations')).rows).toEqual([]);
       expect((await db.execute('SELECT * FROM installation_identity')).rows).toEqual([]);
+      expect((await db.execute('SELECT * FROM collaboration_inbox_state')).rows).toEqual([{ singleton:1, acknowledged_sequence:0 }]);
     } finally { db.close(); }
 
     db = await openMigratedDatabase({ name:'test.sqlite', location:dir });

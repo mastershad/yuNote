@@ -19,7 +19,8 @@ describe('installation sync coordinator',()=>{
         VALUES (1,'enrolled','11111111-1111-4111-8111-111111111111','install-key',1,'binding-1',?,?,0,'2026-09-12','2026-09-12','https://cloud.example')`,
         [state.replica_id,state.generation]);
       const ranges:Array<[number,number]>=[];
-      global.fetch=jest.fn(async(_url,init)=>{
+      global.fetch=jest.fn(async(url,init)=>{
+        if(String(url).includes('/collaboration/inbox'))return {status:200,json:async()=>({deliveries:[]})} as Response;
         const body=JSON.parse(init!.body as string) as {fromRevision:number;toRevision:number};
         ranges.push([body.fromRevision,body.toRevision]);
         if(ranges.length===1)await createNote(db,{id:'note-102',title:'Arrived during upload',content:''});

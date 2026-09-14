@@ -85,7 +85,10 @@ export function ListsScreen(props: {
               style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
               <View style={styles.listGlyph}><Text style={styles.listGlyphText}>✓</Text></View>
               <View style={styles.cardText}>
-                <Text style={styles.cardTitle}>{list.title}</Text>
+                <View style={styles.titleRow}>
+                  {list.sharingMode==='partner'?<Text testID={`partner-rings-${list.id}`} accessibilityLabel="Партнёрский список" style={styles.rings}>💍💍</Text>:null}
+                  <Text style={styles.cardTitle}>{list.title}</Text>
+                </View>
                 <Text style={styles.cardMeta}>{completed} из {items.length} выполнено</Text>
               </View>
               <Text style={styles.chevron}>›</Text>
@@ -135,6 +138,8 @@ function makeStyles(p: ThemePalette) {
     listGlyph: { width: 50, height: 50, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: p.accentSoft },
     listGlyphText: { color: p.accent, fontSize: 24, fontWeight: '900' },
     cardText: { flex: 1 },
+    titleRow:{flexDirection:'row',alignItems:'center',gap:7},
+    rings:{fontSize:16},
     cardTitle: { color: p.text, fontSize: 19, fontWeight: '900' },
     cardMeta: { color: p.mutedText, fontSize: 14, marginTop: 5 },
     chevron: { color: p.accent, fontSize: 32, fontWeight: '300' },

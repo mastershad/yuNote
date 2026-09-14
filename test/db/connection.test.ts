@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 
 describe('openMigratedDatabase', () => {
   let dir: string;
-  const allTables = ['applied_operations','classes','dataset_state','installation_identity','list_items','lists','mutation_journal','notes','sync_outbox'];
+  const allTables = ['applied_operations','classes','collaboration_inbox_state','collaboration_members','collaboration_outbox','dataset_state','installation_identity','list_items','lists','mutation_journal','notes','sync_outbox'];
 
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'yunote-migration-test-'));
@@ -40,7 +40,7 @@ describe('openMigratedDatabase', () => {
       // real native binding. See src/db/connection.ts for the full note.
       const { rows } = await db.execute('SELECT * FROM pragma_user_version()');
 
-      expect(rows?.[0]?.user_version).toBe(5);
+      expect(rows?.[0]?.user_version).toBe(6);
     } finally {
       db.close();
     }
@@ -130,12 +130,12 @@ describe('openMigratedDatabase', () => {
     }
   });
 
-  it('sets user_version to 5 after running all migrations', async () => {
+  it('sets user_version to 6 after running all migrations', async () => {
     const db = await openMigratedDatabase({ name: 'test.sqlite', location: dir });
 
     try {
       const { rows } = await db.execute('SELECT * FROM pragma_user_version()');
-      expect(rows?.[0]?.user_version).toBe(5);
+      expect(rows?.[0]?.user_version).toBe(6);
       const { rows: installationColumns } = await db.execute("SELECT name FROM pragma_table_info('installation_identity')");
       expect(installationColumns?.map(row => row.name)).toContain('cloud_base_url');
     } finally {
@@ -183,7 +183,7 @@ describe('openMigratedDatabase', () => {
       expect(rows?.map((r) => r.name)).toEqual(allTables);
 
       const { rows: versionRows } = await recovered.execute('SELECT * FROM pragma_user_version()');
-      expect(versionRows?.[0]?.user_version).toBe(5);
+      expect(versionRows?.[0]?.user_version).toBe(6);
     } finally {
       recovered.close();
     }

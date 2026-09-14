@@ -190,6 +190,65 @@ const migrations: Migration[] = [
       await db.execute('ALTER TABLE installation_identity ADD COLUMN cloud_base_url TEXT');
     },
   },
+  {
+    version: 6,
+    up: async (db) => {
+      await db.execute("ALTER TABLE lists ADD COLUMN purpose TEXT NOT NULL DEFAULT 'generic' CHECK (purpose IN ('generic','shopping'))");
+      await db.execute("ALTER TABLE lists ADD COLUMN sharing_mode TEXT NOT NULL DEFAULT 'personal' CHECK (sharing_mode IN ('personal','shared','partner'))");
+      await db.execute('ALTER TABLE lists ADD COLUMN shared_revision INTEGER CHECK (shared_revision >= 0)');
+      await db.execute("ALTER TABLE lists ADD COLUMN collaboration_role TEXT CHECK (collaboration_role IN ('owner','admin','editor','viewer','partner'))");
+      await db.execute('ALTER TABLE list_items ADD COLUMN completed_by_public_client_id TEXT');
+      await db.execute('ALTER TABLE list_items ADD COLUMN completed_by_display_name TEXT');
+      await db.execute('ALTER TABLE list_items ADD COLUMN completed_by_has_avatar INTEGER CHECK (completed_by_has_avatar IN (0,1))');
+      await db.execute('ALTER TABLE list_items ADD COLUMN completed_by_avatar_version INTEGER CHECK (completed_by_avatar_version >= 0)');
+      await db.execute(`CREATE TABLE collaboration_members (
+        list_id TEXT NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
+        public_client_id TEXT NOT NULL,
+        display_name TEXT,
+        has_avatar INTEGER NOT NULL DEFAULT 0 CHECK (has_avatar IN (0,1)),
+        avatar_version INTEGER NOT NULL DEFAULT 0 CHECK (avatar_version >= 0),
+        avatar_mime_type TEXT,
+        avatar_base64 TEXT,
+        role TEXT NOT NULL CHECK (role IN ('owner','admin','editor','viewer','partner')),
+        is_current_user INTEGER NOT NULL DEFAULT 0 CHECK (is_current_user IN (0,1)),
+        PRIMARY KEY (list_id,public_client_id)
+        ,CHECK ((avatar_mime_type IS NULL) = (avatar_base64 IS NULL))
+      )`);
+      await db.execute(`CREATE TABLE collaboration_inbox_state (
+        singleton INTEGER PRIMARY KEY CHECK (singleton=1),
+        acknowledged_sequence INTEGER NOT NULL DEFAULT 0 CHECK (acknowledged_sequence >= 0)
+      )`);
+      await db.execute('INSERT INTO collaboration_inbox_state (singleton,acknowledged_sequence) VALUES (1,0)');
+      await db.execute(`CREATE TABLE collaboration_outbox (
+        operation_id TEXT PRIMARY KEY,
+        list_id TEXT NOT NULL,
+        expected_revision INTEGER NOT NULL CHECK (expected_revision >= 0),
+        operation_type TEXT NOT NULL CHECK (operation_type IN ('add_item','update_item','set_checked','delete_item')),
+        payload_json TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','sent')),
+        server_revision INTEGER,
+        created_at TEXT NOT NULL
+      )`);
+      await db.execute(`CREATE TRIGGER lists_collaboration_insert_guard BEFORE INSERT ON lists BEGIN
+        SELECT CASE WHEN NEW.sharing_mode='partner' AND NEW.purpose!='shopping' THEN RAISE(ABORT,'partner requires shopping purpose') END;
+        SELECT CASE WHEN NEW.sharing_mode='personal' AND (NEW.shared_revision IS NOT NULL OR NEW.collaboration_role IS NOT NULL) THEN RAISE(ABORT,'personal list has collaboration metadata') END;
+        SELECT CASE WHEN NEW.sharing_mode!='personal' AND (NEW.shared_revision IS NULL OR NEW.collaboration_role IS NULL) THEN RAISE(ABORT,'collaborative list metadata required') END;
+      END`);
+      await db.execute(`CREATE TRIGGER lists_collaboration_update_guard BEFORE UPDATE OF purpose,sharing_mode,shared_revision,collaboration_role ON lists BEGIN
+        SELECT CASE WHEN NEW.sharing_mode='partner' AND NEW.purpose!='shopping' THEN RAISE(ABORT,'partner requires shopping purpose') END;
+        SELECT CASE WHEN NEW.sharing_mode='personal' AND (NEW.shared_revision IS NOT NULL OR NEW.collaboration_role IS NOT NULL) THEN RAISE(ABORT,'personal list has collaboration metadata') END;
+        SELECT CASE WHEN NEW.sharing_mode!='personal' AND (NEW.shared_revision IS NULL OR NEW.collaboration_role IS NULL) THEN RAISE(ABORT,'collaborative list metadata required') END;
+      END`);
+      await db.execute(`CREATE TRIGGER shared_item_completion_insert_guard BEFORE INSERT ON list_items BEGIN
+        SELECT CASE WHEN NEW.checked=1 AND (SELECT sharing_mode FROM lists WHERE id=NEW.list_id)='shared' AND NEW.completed_by_public_client_id IS NULL THEN RAISE(ABORT,'shared completion actor required') END;
+        SELECT CASE WHEN NEW.checked=0 AND NEW.completed_by_public_client_id IS NOT NULL THEN RAISE(ABORT,'active item cannot have completion actor') END;
+      END`);
+      await db.execute(`CREATE TRIGGER shared_item_completion_update_guard BEFORE UPDATE OF checked,completed_by_public_client_id ON list_items BEGIN
+        SELECT CASE WHEN NEW.checked=1 AND (SELECT sharing_mode FROM lists WHERE id=NEW.list_id)='shared' AND NEW.completed_by_public_client_id IS NULL THEN RAISE(ABORT,'shared completion actor required') END;
+        SELECT CASE WHEN NEW.checked=0 AND NEW.completed_by_public_client_id IS NOT NULL THEN RAISE(ABORT,'active item cannot have completion actor') END;
+      END`);
+    },
+  },
 ];
 
 export async function openMigratedDatabase(options: { name: string; location: string }): Promise<OpSqliteDb> {
