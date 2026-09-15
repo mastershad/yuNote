@@ -15,6 +15,13 @@ export interface StructuredAction {
   listName?: string;
   title?: string;
   content?: string;
+  /** What kind of list Cloud Platform resolved the target inside. Used only as
+   * a fail-closed cross-check (a collaborative target must never be written as
+   * personal data) -- never as a grant: per the shared-and-partner-lists design
+   * spec §8, a client-supplied sharing mode or role is ignored, and the role
+   * that decides what may happen here is this installation's own membership
+   * row. */
+  sharingMode?: 'shared' | 'partner';
 }
 
 export type ActionDispatchResult = { status: 'applied' } | { status: 'failed'; reason: string };
@@ -22,20 +29,39 @@ export type ActionDispatchResult = { status: 'applied' } | { status: 'failed'; r
 async function applyCollaborativeAction(db:OpSqliteDb,action:StructuredAction,operationId:string,list:{id:string;collaboration_role:string}):Promise<ActionDispatchResult>{
   if(list.collaboration_role==='viewer')return {status:'failed',reason:`${list.id}: collaboration role is read-only`};
   const type=action.verb==='Capture'?'add_item':action.verb==='Modify'?'update_item':action.verb==='Complete'?'set_checked':'delete_item';
-  const payload:Record<string,unknown>={itemId:action.targetId};
-  if(type==='add_item'||type==='update_item')payload.text=action.content??'';
-  if(type==='set_checked')payload.checked=true;
-  await applyCollaborativeListOperation(db,{operationId,listId:list.id,type,payload});
+  // A Clear names every item it removes. Each one is its own collaborative
+  // operation (the outbox is keyed per item id, so a single operation carrying
+  // one itemId would clear only one item of the list and leave the rest,
+  // locally and for every other member).
+  const itemIds=action.verb==='Clear'?(action.targetIds??[action.targetId]):[action.targetId];
+  for(const [index,itemId] of itemIds.entries()){
+    const payload:Record<string,unknown>={itemId};
+    if(type==='add_item'||type==='update_item')payload.text=action.content??'';
+    if(type==='set_checked')payload.checked=true;
+    // Per-item operation ids stay derived from the transfer id, so a redelivered
+    // Clear is still idempotent item by item.
+    await applyCollaborativeListOperation(db,{operationId:action.verb==='Clear'?`${operationId}#${index}`:operationId,listId:list.id,type,payload});
+  }
   return {status:'applied'};
 }
 
 export async function applyStructuredAction(db: OpSqliteDb, action: StructuredAction, operationId=generateId()): Promise<ActionDispatchResult> {
+  // The whitelist is also the reason no audio intention can administer a
+  // collaborative list: only note and list-*item* content operations have a
+  // dispatchable shape here, so invitations, role changes, ownership transfer,
+  // membership revocation and list deletion -- cabinet-only per the
+  // shared-and-partner-lists design spec §3 -- have nowhere to land.
   const supported=(action.targetType==='note' && ['Capture','Modify','Remove','Clear'].includes(action.verb)) ||
     (action.targetType==='listItem' && ['Capture','Modify','Complete','Remove','Clear'].includes(action.verb));
   if (!supported) return { status:'failed',reason:`unsupported targetType/verb combination: ${action.targetType}/${action.verb}` };
   try {
     const collaboration=action.targetType==='listItem'?await findCollaborativeList(db,action.verb==='Capture'?{listId:action.parentListId}:{itemId:action.targetId}):undefined;
     if(collaboration)return await applyCollaborativeAction(db,action,operationId,collaboration);
+    // Cloud resolved a SHARED/PARTNER list but this installation has none --
+    // the projection has not arrived yet, or the membership was revoked.
+    // Falling through would write the item into personal data, which is the
+    // exact misrouting this routing work exists to prevent.
+    if(action.sharingMode)return {status:'failed',reason:`${action.parentListId??action.targetId}: cloud resolved a ${action.sharingMode} list, but no collaborative list is available locally`};
     const outcome=await runLocalOperation(db,{ operationId,request:action,execute:async(tx)=>{
       const events=[];
       if (action.targetType==='note') {

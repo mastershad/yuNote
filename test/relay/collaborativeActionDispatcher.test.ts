@@ -28,6 +28,54 @@ describe('collaborative structured actions',()=>{
     expect((await db.execute('SELECT COUNT(*) AS count FROM collaboration_outbox')).rows).toEqual([{count:0}]);
   });
 
+  it('clears every item of a collaborative list, not just the first',async()=>{
+    await seed();
+    for(const id of ['a','b','c'])await db.execute("INSERT INTO list_items (id,list_id,text,checked,position,rev,created_at,updated_at) VALUES (?,'shared','x',0,0,1,'now','now')",[id]);
+
+    expect(await applyStructuredAction(db,{verb:'Clear',targetType:'listItem',targetId:'a',targetIds:['a','b','c'],parentListId:'shared'},'clear-op')).toEqual({status:'applied'});
+
+    expect((await db.execute("SELECT COUNT(*) AS count FROM list_items WHERE list_id='shared'")).rows).toEqual([{count:0}]);
+    expect((await db.execute("SELECT operation_id,operation_type FROM collaboration_outbox ORDER BY operation_id")).rows).toEqual([
+      {operation_id:'clear-op#0',operation_type:'delete_item'},
+      {operation_id:'clear-op#1',operation_type:'delete_item'},
+      {operation_id:'clear-op#2',operation_type:'delete_item'},
+    ]);
+  });
+
+  it('refuses to write a collaborative target into personal data when no collaborative list is present',async()=>{
+    // The cloud resolved a SHARED/PARTNER list; this installation has no such
+    // list locally (never synced, or the membership was revoked). Writing it as
+    // a personal item is exactly the misrouting bug -- fail instead.
+    await db.execute(`INSERT INTO lists (id,title,class_id,position,purpose,sharing_mode,shared_revision,collaboration_role,rev,created_at,updated_at)
+      VALUES ('mine','Покупки',NULL,0,'shopping','personal',NULL,NULL,1,'now','now')`);
+
+    const result=await applyStructuredAction(db,{verb:'Capture',targetType:'listItem',targetId:'item',parentListId:'mine',content:'Кола',sharingMode:'partner'},'op');
+
+    expect(result).toEqual({status:'failed',reason:'mine: cloud resolved a partner list, but no collaborative list is available locally'});
+    expect((await db.execute("SELECT COUNT(*) AS count FROM list_items")).rows).toEqual([{count:0}]);
+  });
+
+  it('still applies a personal action that carries no sharingMode',async()=>{
+    await db.execute(`INSERT INTO lists (id,title,class_id,position,purpose,sharing_mode,shared_revision,collaboration_role,rev,created_at,updated_at)
+      VALUES ('mine','Покупки',NULL,0,'shopping','personal',NULL,NULL,1,'now','now')`);
+
+    expect(await applyStructuredAction(db,{verb:'Capture',targetType:'listItem',targetId:'item',parentListId:'mine',content:'Кола'},'op')).toEqual({status:'applied'});
+    expect((await db.execute("SELECT list_id,text FROM list_items")).rows).toEqual([{list_id:'mine',text:'Кола'}]);
+  });
+
+  it('cannot express a membership or list-administration operation at all',async()=>{
+    await seed('owner');
+    // Design spec §3: invitations, role changes, ownership transfer, membership
+    // revocation and shared-list deletion are cabinet-only. Even an owner's
+    // voiced attempt has no dispatchable shape here.
+    for(const verb of ['Capture','Modify','Remove','Complete','Clear'] as const){
+      expect(await applyStructuredAction(db,{verb,targetType:'list',targetId:'shared',parentListId:'shared'},`admin-${verb}`))
+        .toEqual({status:'failed',reason:`unsupported targetType/verb combination: list/${verb}`});
+    }
+    expect((await db.execute('SELECT COUNT(*) AS count FROM collaboration_outbox')).rows).toEqual([{count:0}]);
+    expect((await db.execute("SELECT collaboration_role FROM lists WHERE id='shared'")).rows).toEqual([{collaboration_role:'owner'}]);
+  });
+
   it('records the current client on SharedList completion',async()=>{
     await seed();
     await db.execute("INSERT INTO list_items (id,list_id,text,checked,position,rev,created_at,updated_at) VALUES ('item','shared','Milk',0,0,1,'now','now')");
