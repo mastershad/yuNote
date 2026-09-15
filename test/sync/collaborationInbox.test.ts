@@ -128,4 +128,29 @@ describe('collaboration inbox client',()=>{
     await expect(client.pollApplyAndAcknowledge()).resolves.toEqual({status:'applied',count:2});
     expect((await db.execute("SELECT COUNT(*) AS count FROM lists WHERE id='shared-1'")).rows).toEqual([{count:0}]);
   });
+
+  it('pulses once after applying a batch containing an add_item and a set_checked delivery',async()=>{
+    const haptics={arrivalPulse:jest.fn()};
+    const client=createCollaborationInbox({db,keyProvider:keys,baseUrl:'https://cloud.example',haptics,request:async(_url,init)=>init.method==='GET'?{status:200,json:async()=>({deliveries})}:{status:200,json:async()=>({acknowledgedThrough:2})}});
+    await expect(client.pollApplyAndAcknowledge()).resolves.toEqual({status:'applied',count:2});
+    expect(haptics.arrivalPulse).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not pulse for a batch that only discards/removes a projection -- no content arrived',async()=>{
+    const haptics={arrivalPulse:jest.fn()};
+    const batch=[
+      {sequence:1,operationId:'discarded',listId:'shared-1',revision:1,type:'discard',payload:{}},
+      {sequence:2,operationId:'removed',listId:'shared-1',revision:1,type:'remove_projection',payload:{removeListId:'shared-1'}},
+    ];
+    const client=createCollaborationInbox({db,keyProvider:keys,baseUrl:'https://cloud.example',haptics,request:async(_url,init)=>init.method==='GET'?{status:200,json:async()=>({deliveries:batch})}:{status:200,json:async()=>({acknowledgedThrough:2})}});
+    await expect(client.pollApplyAndAcknowledge()).resolves.toEqual({status:'applied',count:2});
+    expect(haptics.arrivalPulse).not.toHaveBeenCalled();
+  });
+
+  it('does not pulse when there is nothing fresh to apply',async()=>{
+    const haptics={arrivalPulse:jest.fn()};
+    const client=createCollaborationInbox({db,keyProvider:keys,baseUrl:'https://cloud.example',haptics,request:async(_url,init)=>init.method==='GET'?{status:200,json:async()=>({deliveries:[]})}:{status:200,json:async()=>({acknowledgedThrough:0})}});
+    await expect(client.pollApplyAndAcknowledge()).resolves.toEqual({status:'idle'});
+    expect(haptics.arrivalPulse).not.toHaveBeenCalled();
+  });
 });

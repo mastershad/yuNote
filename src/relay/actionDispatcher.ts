@@ -5,6 +5,7 @@ import { createListInTransaction,addListItemInTransaction,updateListItemInTransa
 import { runLocalOperation } from '../data/localOperation';
 import { generateId } from '../data/id';
 import {applyCollaborativeListOperation,findCollaborativeList} from '../data/collaborativeListOperations';
+import {type HapticFeedback,androidVibrationFeedback} from './haptics';
 
 export interface StructuredAction {
   verb: 'Capture' | 'Modify' | 'Remove' | 'Complete' | 'Clear';
@@ -25,6 +26,18 @@ export interface StructuredAction {
 }
 
 export type ActionDispatchResult = { status: 'applied' } | { status: 'failed'; reason: string };
+
+/**
+ * A short haptic pulse for content that just arrived from a Key Fob voice
+ * capture -- never for an edit made directly in this app's own UI, which
+ * never routes through applyStructuredAction. Restricted to the two verbs
+ * that mean "something new landed": Capture (a new note or list item) and
+ * Complete (an item got checked off). Modify/Remove/Clear are edits to
+ * something already on screen, not an arrival.
+ */
+function pulseOnArrival(action: StructuredAction, result: ActionDispatchResult, haptics: HapticFeedback): void {
+  if (result.status === 'applied' && (action.verb === 'Capture' || action.verb === 'Complete')) haptics.arrivalPulse();
+}
 
 async function collaborativeItemExists(db:OpSqliteDb,listId:string,itemId:string):Promise<boolean>{
   return (await db.execute('SELECT 1 AS value FROM list_items WHERE id=? AND list_id=?',[itemId,listId])).rows?.[0]!==undefined;
@@ -65,7 +78,7 @@ async function applyCollaborativeAction(db:OpSqliteDb,action:StructuredAction,op
   return {status:'applied'};
 }
 
-export async function applyStructuredAction(db: OpSqliteDb, action: StructuredAction, operationId=generateId()): Promise<ActionDispatchResult> {
+export async function applyStructuredAction(db: OpSqliteDb, action: StructuredAction, operationId=generateId(), haptics: HapticFeedback = androidVibrationFeedback): Promise<ActionDispatchResult> {
   // The whitelist is also the reason no audio intention can administer a
   // collaborative list: only note and list-*item* content operations have a
   // dispatchable shape here, so invitations, role changes, ownership transfer,
@@ -84,7 +97,7 @@ export async function applyStructuredAction(db: OpSqliteDb, action: StructuredAc
     const collaboration=action.targetType==='listItem'
       ?await findCollaborativeList(db,action.parentListId?{listId:action.parentListId}:{itemId:action.targetId})
       :undefined;
-    if(collaboration)return await applyCollaborativeAction(db,action,operationId,collaboration);
+    if(collaboration){const collabResult=await applyCollaborativeAction(db,action,operationId,collaboration);pulseOnArrival(action,collabResult,haptics);return collabResult;}
     // Cloud resolved a SHARED/PARTNER list but this installation has none --
     // the projection has not arrived yet, or the membership was revoked.
     // Falling through would write the item into personal data, which is the
@@ -117,6 +130,9 @@ export async function applyStructuredAction(db: OpSqliteDb, action: StructuredAc
       }
       return { result:{ status:'applied' as const },events };
     }});
+    // Only a fresh apply is an arrival -- a replayed operationId (the same
+    // message redelivered) already pulsed the first time.
+    if (!outcome.replayed) pulseOnArrival(action,outcome.result,haptics);
     return outcome.result;
   } catch (error) {
     // A repository function throws when it can't find the row it was asked

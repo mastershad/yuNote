@@ -1,6 +1,7 @@
 import type { OpSqliteDb, OpSqliteExecutor } from '../db/connection';
 import { generateId } from '../data/id';
 import type { InstallationKeyProvider } from '../security/installationKeys';
+import { type HapticFeedback, androidVibrationFeedback } from '../relay/haptics';
 
 const INBOX_PATH='/yunote/installations/collaboration/inbox?limit=50';
 const ACK_PATH='/yunote/installations/collaboration/ack';
@@ -140,10 +141,11 @@ async function applyDelivery(tx:OpSqliteExecutor,delivery:Delivery):Promise<void
   await tx.execute('UPDATE lists SET shared_revision=?,updated_at=? WHERE id=?',[delivery.revision,new Date().toISOString(),delivery.listId]);
 }
 
-export function createCollaborationInbox(deps:{db:OpSqliteDb;keyProvider:InstallationKeyProvider;baseUrl:string;request?:Request;now?:()=>number;generateNonce?:()=>string}){
+export function createCollaborationInbox(deps:{db:OpSqliteDb;keyProvider:InstallationKeyProvider;baseUrl:string;request?:Request;now?:()=>number;generateNonce?:()=>string;haptics?:HapticFeedback}){
   if(!/^https:\/\//i.test(deps.baseUrl))throw new Error('Collaboration inbox requires an HTTPS endpoint');
   const baseUrl=deps.baseUrl.replace(/\/$/,'');const request:Request=deps.request??((url,init)=>fetch(url,init));
   const now=deps.now??Date.now;const nonce=deps.generateNonce??(()=>generateId().replace(/-/g,''));
+  const haptics=deps.haptics??androidVibrationFeedback;
   const installation=async()=>{
     const row=(await deps.db.execute('SELECT status,installation_id,key_alias,key_version FROM installation_identity WHERE singleton=1')).rows?.[0] as unknown as InstallationRow|undefined;
     return row?.status==='enrolled'?row:undefined;
@@ -168,13 +170,22 @@ export function createCollaborationInbox(deps:{db:OpSqliteDb;keyProvider:Install
     if(fresh.length){
       const latestProjection=new Map<string,number>();
       for(const delivery of fresh)if(delivery.type==='replace_projection')latestProjection.set(delivery.listId,delivery.sequence);
+      // A pulse means new content actually landed -- a list item arriving or
+      // getting checked off -- never a membership/projection sync (e.g. being
+      // added to or removed from a list) and never a superseded delivery that
+      // never touched local data.
+      let arrived=false;
       await deps.db.transaction(async tx=>{
         for(const delivery of fresh){
           const superseded=(latestProjection.get(delivery.listId)??0)>delivery.sequence&&['add_item','update_item','set_checked','delete_item'].includes(delivery.type);
-          if(!superseded)await applyDelivery(tx,delivery);
+          if(!superseded){
+            await applyDelivery(tx,delivery);
+            if(delivery.type==='add_item'||delivery.type==='set_checked')arrived=true;
+          }
         }
         await tx.execute('UPDATE collaboration_inbox_state SET acknowledged_sequence=? WHERE singleton=1',[cursor]);
       });
+      if(arrived)haptics.arrivalPulse();
     }
     if(fresh.length){
       const avatarRows=(await deps.db.execute('SELECT list_id,public_client_id,avatar_version FROM collaboration_members WHERE has_avatar=1 AND avatar_base64 IS NULL')).rows??[];

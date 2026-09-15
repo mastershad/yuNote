@@ -239,6 +239,48 @@ describe('applyStructuredAction', () => {
 
     expect(result.status).toBe('failed');
   });
+
+  it('pulses on a successful note Capture, but not on Modify/Remove/Clear', async () => {
+    const haptics = { arrivalPulse: jest.fn() };
+    await applyStructuredAction(db, { verb: 'Capture', targetType: 'note', targetId: 'n1', title: 'A', content: 'x' }, undefined, haptics);
+    expect(haptics.arrivalPulse).toHaveBeenCalledTimes(1);
+
+    await applyStructuredAction(db, { verb: 'Modify', targetType: 'note', targetId: 'n1', content: 'y' }, undefined, haptics);
+    await applyStructuredAction(db, { verb: 'Remove', targetType: 'note', targetId: 'n1' }, undefined, haptics);
+    expect(haptics.arrivalPulse).toHaveBeenCalledTimes(1);
+  });
+
+  it('pulses on a successful listItem Capture and Complete, but not on Modify/Remove/Clear', async () => {
+    const haptics = { arrivalPulse: jest.fn() };
+    const list = await createList(db, 'Покупки');
+    const item = await addListItem(db, list.id, 'Молоко');
+
+    await applyStructuredAction(db, { verb: 'Capture', targetType: 'listItem', targetId: 'i1', parentListId: list.id, content: 'Хлеб' }, undefined, haptics);
+    expect(haptics.arrivalPulse).toHaveBeenCalledTimes(1);
+
+    await applyStructuredAction(db, { verb: 'Complete', targetType: 'listItem', targetId: item.id, parentListId: list.id }, undefined, haptics);
+    expect(haptics.arrivalPulse).toHaveBeenCalledTimes(2);
+
+    await applyStructuredAction(db, { verb: 'Modify', targetType: 'listItem', targetId: item.id, parentListId: list.id, content: 'Овсяное молоко' }, undefined, haptics);
+    await applyStructuredAction(db, { verb: 'Remove', targetType: 'listItem', targetId: item.id, parentListId: list.id }, undefined, haptics);
+    expect(haptics.arrivalPulse).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not pulse when a Capture/Complete fails to apply', async () => {
+    const haptics = { arrivalPulse: jest.fn() };
+
+    await applyStructuredAction(db, { verb: 'Complete', targetType: 'listItem', targetId: 'does-not-exist', parentListId: 'some-list' }, undefined, haptics);
+    await applyStructuredAction(db, { verb: 'Capture', targetType: 'list', targetId: 'yn-x', title: 'Заголовок' }, undefined, haptics);
+
+    expect(haptics.arrivalPulse).not.toHaveBeenCalled();
+  });
+
+  it('defaults to the real Android vibration feedback when no haptics dependency is given', async () => {
+    // No haptics arg -- exercises the default parameter wiring rather than
+    // asserting on the RN Vibration mock itself.
+    const result = await applyStructuredAction(db, { verb: 'Capture', targetType: 'note', targetId: 'n-default', title: 'A', content: 'x' });
+    expect(result).toEqual({ status: 'applied' });
+  });
 });
 
 describe('registerActionDispatcher', () => {

@@ -119,4 +119,23 @@ describe('collaborative structured actions',()=>{
     expect(await applyStructuredAction(db,{verb:'Complete',targetType:'listItem',targetId:'item'},'complete')).toEqual({status:'applied'});
     expect((await db.execute("SELECT checked,completed_by_public_client_id,completed_by_display_name FROM list_items WHERE id='item'")).rows).toEqual([{checked:1,completed_by_public_client_id:'YU-ABCD-EFGH',completed_by_display_name:'Anna'}]);
   });
+
+  it('pulses on a collaborative Capture and Complete, not on a viewer rejection',async()=>{
+    const haptics={arrivalPulse:jest.fn()};
+    await seed();
+    await db.execute("INSERT INTO list_items (id,list_id,text,checked,position,rev,created_at,updated_at) VALUES ('item','shared','Milk',0,0,1,'now','now')");
+
+    await applyStructuredAction(db,{verb:'Capture',targetType:'listItem',targetId:'item2',parentListId:'shared',content:'Bread'},'op-capture',haptics);
+    expect(haptics.arrivalPulse).toHaveBeenCalledTimes(1);
+
+    await applyStructuredAction(db,{verb:'Complete',targetType:'listItem',targetId:'item'},'op-complete',haptics);
+    expect(haptics.arrivalPulse).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not pulse when a collaborative mutation is rejected (viewer role)',async()=>{
+    const haptics={arrivalPulse:jest.fn()};
+    await seed('viewer');
+    await applyStructuredAction(db,{verb:'Capture',targetType:'listItem',targetId:'item',parentListId:'shared',content:'Milk'},'op',haptics);
+    expect(haptics.arrivalPulse).not.toHaveBeenCalled();
+  });
 });
