@@ -36,10 +36,47 @@ describe('collaborative structured actions',()=>{
 
     expect((await db.execute("SELECT COUNT(*) AS count FROM list_items WHERE list_id='shared'")).rows).toEqual([{count:0}]);
     expect((await db.execute("SELECT operation_id,operation_type FROM collaboration_outbox ORDER BY operation_id")).rows).toEqual([
-      {operation_id:'clear-op#0',operation_type:'delete_item'},
-      {operation_id:'clear-op#1',operation_type:'delete_item'},
-      {operation_id:'clear-op#2',operation_type:'delete_item'},
+      {operation_id:'clear-op#a',operation_type:'delete_item'},
+      {operation_id:'clear-op#b',operation_type:'delete_item'},
+      {operation_id:'clear-op#c',operation_type:'delete_item'},
     ]);
+  });
+
+  it('completes a Clear whose id list contains an item a co-member already deleted',async()=>{
+    await seed();
+    for(const id of ['a','c'])await db.execute("INSERT INTO list_items (id,list_id,text,checked,position,rev,created_at,updated_at) VALUES (?,'shared','x',0,0,1,'now','now')",[id]);
+
+    // 'b' was in the cloud's candidate snapshot but is already gone locally.
+    // The Clear's goal for it is met, so it must not abort 'c' behind it.
+    expect(await applyStructuredAction(db,{verb:'Clear',targetType:'listItem',targetId:'a',targetIds:['a','b','c'],parentListId:'shared'},'clear-op')).toEqual({status:'applied'});
+
+    expect((await db.execute("SELECT COUNT(*) AS count FROM list_items WHERE list_id='shared'")).rows).toEqual([{count:0}]);
+    expect((await db.execute('SELECT operation_id FROM collaboration_outbox ORDER BY operation_id')).rows).toEqual([
+      {operation_id:'clear-op#a'},{operation_id:'clear-op#c'},
+    ]);
+  });
+
+  it('keys each Clear operation on its item id, so a redelivered Clear is idempotent item by item',async()=>{
+    await seed();
+    for(const id of ['a','b'])await db.execute("INSERT INTO list_items (id,list_id,text,checked,position,rev,created_at,updated_at) VALUES (?,'shared','x',0,0,1,'now','now')",[id]);
+
+    expect(await applyStructuredAction(db,{verb:'Clear',targetType:'listItem',targetId:'a',targetIds:['a','b'],parentListId:'shared'},'clear-op')).toEqual({status:'applied'});
+    // Same transfer redelivered: every item is already gone, and the outbox
+    // must not grow a second copy of either operation.
+    expect(await applyStructuredAction(db,{verb:'Clear',targetType:'listItem',targetId:'a',targetIds:['a','b'],parentListId:'shared'},'clear-op')).toEqual({status:'applied'});
+
+    expect((await db.execute('SELECT COUNT(*) AS count FROM collaboration_outbox')).rows).toEqual([{count:2}]);
+  });
+
+  it('still fails a single Remove of an item that no longer exists (the tolerance is Clear-only)',async()=>{
+    await seed();
+    await db.execute("INSERT INTO list_items (id,list_id,text,checked,position,rev,created_at,updated_at) VALUES ('a','shared','x',0,0,1,'now','now')");
+
+    expect(await applyStructuredAction(db,{verb:'Remove',targetType:'listItem',targetId:'a',parentListId:'shared'},'rm')).toEqual({status:'applied'});
+
+    const second=await applyStructuredAction(db,{verb:'Remove',targetType:'listItem',targetId:'a',parentListId:'shared'},'rm2');
+    expect(second.status).toBe('failed');
+    expect((await db.execute('SELECT COUNT(*) AS count FROM collaboration_outbox')).rows).toEqual([{count:1}]);
   });
 
   it('refuses to write a collaborative target into personal data when no collaborative list is present',async()=>{
