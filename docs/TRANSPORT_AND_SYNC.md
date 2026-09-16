@@ -4,6 +4,8 @@
 
 Полное межрепозиторное описание протокола находится в `IoT-Key-Fob-Project/docs/yunote-keyfob-transport.md`. Этот документ описывает сторону yuNote.
 
+Этот документ — про dataset-level direct sync (installation/journal), реализованный к 13 сентября 2026 года. Отдельная, надстроенная поверх него коллаборативная модель общих/партнёрских списков (2026-09-13/15) описана в `IoT-Key-Fob-Project/docs/shared-and-partner-lists-runbook.md` и затрагивает этот документ в двух местах, отмеченных ниже: §4 (payload списков вырос) и §12 (push/wake gap для `collaborationInbox`).
+
 ## 1. Принцип local-first
 
 Любое ручное или полученное от Key Fob изменение сначала проходит через одну локальную транзакцию. Успех локальной операции не зависит от сети и не откатывается из-за ошибки cloud upload.
@@ -55,6 +57,8 @@ runLocalOperation()
 - ids, entity revisions и timestamps.
 
 Массивы имеют стабильную сортировку по `position`, затем `id`. Snapshot hash используется при enrollment, чтобы существующая ЛБД не была ошибочно наложена на отличающуюся ОБД.
+
+**Добавлено 2026-09-15:** `lists`/`listItems` в этом snapshot и в journal-payload теперь несут дополнительные поля `purpose`, `sharingMode`, `sharedRevision`, `collaborationRole`, `completedBy*` — на каждом списке, личном тоже (Shared and Partner Lists, Tasks 1-10). Серверный `journalBatchValidator.ts` должен знать этот же набор полей; расхождение уже один раз вызвало живой инцидент (все journal-batch отклонялись `400`) — см. `IoT-Key-Fob-Project/docs/yunote-keyfob-transport.md` §9 и `shared-and-partner-lists-runbook.md` §7.
 
 ## 5. Получение локального сообщения
 
