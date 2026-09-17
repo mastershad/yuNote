@@ -2,6 +2,7 @@ import React from 'react';
 import { Alert } from 'react-native';
 import { create } from 'zustand';
 import TestRenderer, { act } from 'react-test-renderer';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NotesScreen } from '../../src/ui/NotesScreen';
 import { getThemePalette } from '../../src/ui/theme';
 import type { Note } from '../../src/data/notes';
@@ -55,7 +56,9 @@ describe('NotesScreen', () => {
     let tree!: TestRenderer.ReactTestRenderer;
     await act(async () => {
       tree = TestRenderer.create(
-        <NotesScreen store={model.store as never} classesStore={classesStore().store as never} palette={getThemePalette('light')} />,
+        <GestureHandlerRootView>
+          <NotesScreen store={model.store as never} classesStore={classesStore().store as never} db={{} as never} palette={getThemePalette('light')} />
+        </GestureHandlerRootView>,
       );
     });
 
@@ -83,7 +86,9 @@ describe('NotesScreen', () => {
     let tree!: TestRenderer.ReactTestRenderer;
     await act(async () => {
       tree = TestRenderer.create(
-        <NotesScreen store={model.store as never} classesStore={classesStore().store as never} palette={getThemePalette('dark')} />,
+        <GestureHandlerRootView>
+          <NotesScreen store={model.store as never} classesStore={classesStore().store as never} db={{} as never} palette={getThemePalette('dark')} />
+        </GestureHandlerRootView>,
       );
     });
     await act(async () => tree.root.findByProps({ testID: 'note-n1' }).props.onPress());

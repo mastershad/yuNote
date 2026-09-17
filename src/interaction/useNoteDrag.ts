@@ -54,6 +54,7 @@ export function useNoteDrag(context: {
 }) {
   const registry = useRef(createDropTargetRegistry()).current;
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [hoveredTargetId, setHoveredTargetId] = useState<string | null>(null);
   const animation = useDragAnimation();
 
   const fns: DropResolutionFns = {
@@ -80,7 +81,10 @@ export function useNoteDrag(context: {
   function useDragForNote(noteId: string, measureOrigin: () => Rect, idToType: (id: string) => TargetType) {
     return useDraggable(noteId, measureOrigin, {
       onPickUp: () => { setDraggingId(noteId); animation.playPickUp(); },
-      onMove: (_id, point) => animation.playMove(point),
+      onMove: (_id, point) => {
+        animation.playMove(point);
+        setHoveredTargetId(registry.hitTest(point));
+      },
       onDrop: async (_id, point) => {
         const targetId = registry.hitTest(point);
         const targetType = targetId ? (idToType(targetId) ?? targetTypeFor(targetId)) : null;
@@ -92,14 +96,16 @@ export function useNoteDrag(context: {
         }
         animation.reset();
         setDraggingId(null);
+        setHoveredTargetId(null);
       },
       onCancel: async () => {
         await animation.playCancel();
         animation.reset();
         setDraggingId(null);
+        setHoveredTargetId(null);
       },
     });
   }
 
-  return { draggingId, animation, registerTarget, unregisterTarget, useDragForNote };
+  return { draggingId, hoveredTargetId, animation, registerTarget, unregisterTarget, useDragForNote };
 }

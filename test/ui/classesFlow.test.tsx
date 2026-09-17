@@ -2,6 +2,7 @@ import React from 'react';
 import { Text } from 'react-native';
 import { create } from 'zustand';
 import TestRenderer, { act } from 'react-test-renderer';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { NotesScreen } from '../../src/ui/NotesScreen';
 import { getThemePalette } from '../../src/ui/theme';
 import type { Note } from '../../src/data/notes';
@@ -41,7 +42,9 @@ describe('NotesScreen: Classes navigation and merged feed', () => {
     let tree!: TestRenderer.ReactTestRenderer;
     await act(async () => {
       tree = TestRenderer.create(
-        <NotesScreen store={notesStore as never} classesStore={classesStore as never} palette={getThemePalette('light')} />,
+        <GestureHandlerRootView>
+          <NotesScreen store={notesStore as never} classesStore={classesStore as never} db={{} as never} palette={getThemePalette('light')} />
+        </GestureHandlerRootView>,
       );
     });
 
@@ -63,7 +66,9 @@ describe('NotesScreen: Classes navigation and merged feed', () => {
     let tree!: TestRenderer.ReactTestRenderer;
     await act(async () => {
       tree = TestRenderer.create(
-        <NotesScreen store={notesStore as never} classesStore={classesStore as never} palette={getThemePalette('light')} />,
+        <GestureHandlerRootView>
+          <NotesScreen store={notesStore as never} classesStore={classesStore as never} db={{} as never} palette={getThemePalette('light')} />
+        </GestureHandlerRootView>,
       );
     });
     await act(async () => tree.root.findByProps({ testID: 'class-c1' }).props.onPress());
@@ -79,7 +84,9 @@ describe('NotesScreen: Classes navigation and merged feed', () => {
     let tree!: TestRenderer.ReactTestRenderer;
     await act(async () => {
       tree = TestRenderer.create(
-        <NotesScreen store={notesStore as never} classesStore={classesStore as never} palette={getThemePalette('light')} />,
+        <GestureHandlerRootView>
+          <NotesScreen store={notesStore as never} classesStore={classesStore as never} db={{} as never} palette={getThemePalette('light')} />
+        </GestureHandlerRootView>,
       );
     });
     await act(async () => tree.root.findByProps({ testID: 'class-c1' }).props.onPress());
@@ -95,7 +102,9 @@ describe('NotesScreen: Classes navigation and merged feed', () => {
     let tree!: TestRenderer.ReactTestRenderer;
     await act(async () => {
       tree = TestRenderer.create(
-        <NotesScreen store={notesStore as never} classesStore={classesStore as never} palette={getThemePalette('light')} />,
+        <GestureHandlerRootView>
+          <NotesScreen store={notesStore as never} classesStore={classesStore as never} db={{} as never} palette={getThemePalette('light')} />
+        </GestureHandlerRootView>,
       );
     });
     await act(async () => tree.root.findByProps({ testID: 'class-c1' }).props.onPress());
@@ -117,7 +126,9 @@ describe('NotesScreen: Classes navigation and merged feed', () => {
     let tree!: TestRenderer.ReactTestRenderer;
     await act(async () => {
       tree = TestRenderer.create(
-        <NotesScreen store={notesStore as never} classesStore={classesStore as never} palette={getThemePalette('light')} />,
+        <GestureHandlerRootView>
+          <NotesScreen store={notesStore as never} classesStore={classesStore as never} db={{} as never} palette={getThemePalette('light')} />
+        </GestureHandlerRootView>,
       );
     });
 
@@ -139,5 +150,38 @@ describe('NotesScreen: Classes navigation and merged feed', () => {
       .join(' | ');
     expect(renderedText).toContain('0 заметок');
     expect(renderedText).not.toContain('undefined заметок');
+  });
+
+  it('a drag in progress shows the Delete target at root, hidden otherwise', async () => {
+    const { notesStore, classesStore } = stores([note({ id: 'n1' })], []);
+
+    let tree!: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      tree = TestRenderer.create(
+        <GestureHandlerRootView>
+          <NotesScreen store={notesStore as never} classesStore={classesStore as never} db={{} as never} palette={getThemePalette('light')} />
+        </GestureHandlerRootView>,
+      );
+    });
+
+    expect(tree.root.findAllByProps({ testID: 'drag-delete-zone' })).toHaveLength(0);
+  });
+
+  it('inside a class, dragging shows both "All Notes" and Delete targets', async () => {
+    const { notesStore, classesStore } = stores([], [klass()]);
+    let tree!: TestRenderer.ReactTestRenderer;
+    await act(async () => {
+      tree = TestRenderer.create(
+        <GestureHandlerRootView>
+          <NotesScreen store={notesStore as never} classesStore={classesStore as never} db={{} as never} palette={getThemePalette('light')} />
+        </GestureHandlerRootView>,
+      );
+    });
+    await act(async () => tree.root.findByProps({ testID: 'class-c1' }).props.onPress());
+
+    // Neither temporary target occupies layout space until a drag starts --
+    // this asserts the resting (non-dragging) state renders neither.
+    expect(tree.root.findAllByProps({ testID: 'drag-delete-zone' })).toHaveLength(0);
+    expect(tree.root.findAllByProps({ testID: 'drag-all-notes-zone' })).toHaveLength(0);
   });
 });

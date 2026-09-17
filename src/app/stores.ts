@@ -5,6 +5,7 @@ import { createClassesStore } from '../state/classesStore';
 import {createInstallationSync,type InstallationSync} from '../sync/installationSync';
 
 export interface AppStores {
+  db: Awaited<ReturnType<typeof openMigratedDatabase>>;
   notes: ReturnType<typeof createNotesStore>;
   lists: ReturnType<typeof createListsStore>;
   classes: ReturnType<typeof createClassesStore>;
@@ -35,6 +36,7 @@ export async function createAppStores(options:{installationSyncFactory?:(db:Awai
   }
 
   return {
+    db,
     notes,
     lists,
     classes,

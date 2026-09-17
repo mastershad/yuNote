@@ -16,13 +16,14 @@ export function ClassCard(props: {
   noteCount: number;
   onPress(): void;
   palette: ThemePalette;
+  hovered?: boolean;
 }) {
   const styles = useMemo(() => makeStyles(props.palette), [props.palette]);
   return (
     <Pressable
       testID={`class-${props.klass.id}`}
       onPress={props.onPress}
-      style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
+      style={({ pressed }) => [styles.card, props.hovered && styles.hovered, pressed && styles.pressed]}>
       <View style={styles.stackBack2} />
       <View style={styles.stackBack1} />
       <View style={styles.cardAccent} />
@@ -44,5 +45,9 @@ function makeStyles(p: ThemePalette) {
     cardTitle: { color: p.text, fontSize: 19, fontWeight: '900' },
     cardBody: { color: p.mutedText, fontSize: 15, lineHeight: 21, marginTop: 7 },
     pressed: { opacity: 0.78, transform: [{ scale: 0.99 }] },
+    // Spec §7's hover-over-valid-target reaction: a dragged note currently
+    // over this class card scales up slightly and tints toward the accent,
+    // signaling "drop here" without a new visual language.
+    hovered: { transform: [{ scale: 1.04 }], backgroundColor: p.accentSoft },
   });
 }

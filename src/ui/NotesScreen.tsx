@@ -1,7 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Animated, FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
+import { GestureDetector } from 'react-native-gesture-handler';
 import type { Note } from '../data/notes';
 import type { Class } from '../data/classes';
+import type { OpSqliteDb } from '../db/connection';
+import type { Rect } from '../interaction/dropTargetRegistry';
+import { useNoteDrag } from '../interaction/useNoteDrag';
 import { createNotesStore } from '../state/notesStore';
 import { createClassesStore } from '../state/classesStore';
 import { EmptyState, FloatingAddButton, InlineError, ScreenHeader } from './components';
@@ -9,6 +13,9 @@ import { ClassCard } from './ClassCard';
 import { ClassViewHeader } from './ClassViewHeader';
 import { NoteEditor } from './NoteEditor';
 import type { ThemePalette } from './theme';
+
+const EMPTY_RECT: Rect = { x: 0, y: 0, width: 0, height: 0 };
+type TargetTypeGuess = 'note' | 'class' | 'delete' | 'all-notes' | null;
 
 type ScreenState = { view: 'root' } | { view: 'class'; classId: string; className: string };
 type FeedItem = { type: 'note'; note: Note } | { type: 'class'; klass: Class };
@@ -28,6 +35,7 @@ function mergeRootFeed(notes: Note[], classes: Class[]): FeedItem[] {
 export function NotesScreen(props: {
   store: ReturnType<typeof createNotesStore>;
   classesStore: ReturnType<typeof createClassesStore>;
+  db: OpSqliteDb;
   palette: ThemePalette;
 }) {
   const notes = props.store(state => state.notes);
@@ -37,6 +45,44 @@ export function NotesScreen(props: {
   const [editing, setEditing] = useState<Note | 'new' | null>(null);
   const [error, setError] = useState('');
   const styles = useMemo(() => makeStyles(props.palette), [props.palette]);
+
+  const drag = useNoteDrag({
+    db: props.db,
+    notesStore: props.store,
+    classesStore: props.classesStore,
+    screen: screen.view === 'root' ? { view: 'root' } : { view: 'class', classId: screen.classId },
+  });
+
+  // The Delete/All-Notes zones only exist in the tree (and re-register their
+  // rect via onLayout) while draggingId !== null; once a drag ends they
+  // unmount without an onLayout to unregister themselves, so their last
+  // rect would otherwise linger in the registry and could wrongly hit-test
+  // against a *later* drag that never renders them (e.g. a later drag on
+  // root, where 'all-notes-zone' never appears at all). Clearing both ids
+  // whenever a drag ends keeps the registry matching what's actually shown.
+  useEffect(() => {
+    if (drag.draggingId === null) {
+      drag.unregisterTarget('delete-zone');
+      drag.unregisterTarget('all-notes-zone');
+    }
+  }, [drag.draggingId]);
+
+  // Root feed: a dropped-on id might be either a note (-> merge into a new
+  // class) or a class (-> add to it) -- resolve from the feed actually on
+  // screen. Class view: everything rendered is a note; the delete/all-notes
+  // zone ids fall through to useNoteDrag's own targetTypeFor instead (this
+  // function returns null for them, same as an unrecognized id would).
+  const idToType = useMemo((): ((id: string) => TargetTypeGuess) => {
+    if (screen.view === 'root') {
+      const map = new Map<string, 'note' | 'class'>();
+      mergeRootFeed(notes, classes).forEach(item => {
+        map.set(item.type === 'note' ? item.note.id : item.klass.id, item.type);
+      });
+      return id => map.get(id) ?? null;
+    }
+    const noteIds = new Set(notes.map(n => n.id));
+    return id => (noteIds.has(id) ? 'note' : null);
+  }, [screen.view, notes, classes]);
 
   useEffect(() => {
     const loadForScreen = screen.view === 'root'
@@ -73,24 +119,23 @@ export function NotesScreen(props: {
           contentContainerStyle={feed && feed.length ? styles.list : styles.emptyList}
           renderItem={({ item }) =>
             item.type === 'class' ? (
-              <ClassCard
-                klass={item.klass}
-                noteCount={noteCounts[item.klass.id] ?? 0}
-                onPress={() => setScreen({ view: 'class', classId: item.klass.id, className: item.klass.name })}
-                palette={props.palette}
-              />
+              <DropTargetLayout id={item.klass.id} drag={drag}>
+                <ClassCard
+                  klass={item.klass}
+                  noteCount={noteCounts[item.klass.id] ?? 0}
+                  onPress={() => setScreen({ view: 'class', classId: item.klass.id, className: item.klass.name })}
+                  palette={props.palette}
+                  hovered={drag.hoveredTargetId === item.klass.id}
+                />
+              </DropTargetLayout>
             ) : (
-              <Pressable
-                testID={`note-${item.note.id}`}
+              <DraggableNoteCard
+                note={item.note}
+                drag={drag}
+                idToType={idToType}
                 onPress={() => setEditing(item.note)}
-                style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
-                <View style={styles.cardAccent} />
-                <View style={styles.cardContent}>
-                  <Text numberOfLines={1} style={styles.cardTitle}>{item.note.title || 'Без названия'}</Text>
-                  <Text numberOfLines={3} style={styles.cardBody}>{item.note.content || 'Пустая заметка'}</Text>
-                  <Text style={styles.cardMeta}>{formatDate(item.note.updatedAt)}</Text>
-                </View>
-              </Pressable>
+                styles={styles}
+              />
             )
           }
           ListEmptyComponent={
@@ -103,23 +148,35 @@ export function NotesScreen(props: {
           keyExtractor={item => item.id}
           contentContainerStyle={notes.length ? styles.list : styles.emptyList}
           renderItem={({ item }) => (
-            <Pressable
-              testID={`note-${item.id}`}
+            <DraggableNoteCard
+              note={item}
+              drag={drag}
+              idToType={idToType}
               onPress={() => setEditing(item)}
-              style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
-              <View style={styles.cardAccent} />
-              <View style={styles.cardContent}>
-                <Text numberOfLines={1} style={styles.cardTitle}>{item.title || 'Без названия'}</Text>
-                <Text numberOfLines={3} style={styles.cardBody}>{item.content || 'Пустая заметка'}</Text>
-                <Text style={styles.cardMeta}>{formatDate(item.updatedAt)}</Text>
-              </View>
-            </Pressable>
+              styles={styles}
+            />
           )}
           ListEmptyComponent={
             <EmptyState symbol="✎" title="Класс пуст" body="Перетащите сюда заметку с главного экрана." palette={props.palette} />
           }
         />
       )}
+      {drag.draggingId !== null ? (
+        <View
+          testID="drag-delete-zone"
+          onLayout={(e) => drag.registerTarget('delete-zone', e.nativeEvent.layout)}
+          style={styles.deleteZone}>
+          <Text style={styles.deleteZoneLabel}>🗑 Удалить</Text>
+        </View>
+      ) : null}
+      {drag.draggingId !== null && screen.view === 'class' ? (
+        <View
+          testID="drag-all-notes-zone"
+          onLayout={(e) => drag.registerTarget('all-notes-zone', e.nativeEvent.layout)}
+          style={styles.allNotesZone}>
+          <Text style={styles.allNotesZoneLabel}>↑ Все заметки</Text>
+        </View>
+      ) : null}
       {screen.view === 'root' ? (
         <FloatingAddButton testID="add-note" label="Добавить заметку" onPress={() => setEditing('new')} palette={props.palette} />
       ) : null}
@@ -148,6 +205,68 @@ function formatDate(iso: string): string {
     : value.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
 }
 
+// Wraps a non-draggable drop target (a root-feed ClassCard) so it registers
+// its rect with the drop-target registry and cleans that entry up again on
+// unmount (e.g. the class is deleted, or the feed re-sorts it out from
+// under the list) -- ClassCard itself stays tap-only per spec §6, this is
+// purely plumbing around it.
+function DropTargetLayout(props: { id: string; drag: ReturnType<typeof useNoteDrag>; children: React.ReactNode }) {
+  useEffect(() => () => props.drag.unregisterTarget(props.id), [props.drag, props.id]);
+  return (
+    <View onLayout={(e) => props.drag.registerTarget(props.id, e.nativeEvent.layout)}>
+      {props.children}
+    </View>
+  );
+}
+
+// A single note card as both a drag source (long-press-and-pan, via
+// useDraggable/useNoteDrag) and a drop target (another dragged note can
+// land on it to form a new class). measureOrigin reads originRef rather
+// than calling the async measureInWindow synchronously -- the ref is kept
+// current by onLayout re-measuring on every layout pass.
+function DraggableNoteCard(props: {
+  note: Note;
+  drag: ReturnType<typeof useNoteDrag>;
+  idToType: (id: string) => TargetTypeGuess;
+  onPress(): void;
+  styles: ReturnType<typeof makeStyles>;
+}) {
+  const { note, drag, idToType, onPress, styles } = props;
+  const originRef = useRef<Rect>(EMPTY_RECT);
+  const cardRef = useRef<View>(null);
+
+  useEffect(() => () => drag.unregisterTarget(note.id), [drag, note.id]);
+
+  const gesture = drag.useDragForNote(note.id, () => originRef.current, idToType);
+  const isDragging = drag.draggingId === note.id;
+
+  return (
+    <GestureDetector gesture={gesture}>
+      <Animated.View
+        ref={cardRef}
+        onLayout={(e) => {
+          drag.registerTarget(note.id, e.nativeEvent.layout);
+          cardRef.current?.measureInWindow((x, y, width, height) => {
+            originRef.current = { x, y, width, height };
+          });
+        }}
+        style={[styles.card, isDragging && drag.animation.style]}>
+        <Pressable
+          testID={`note-${note.id}`}
+          onPress={onPress}
+          style={({ pressed }) => [styles.cardInner, pressed && styles.pressed]}>
+          <View style={styles.cardAccent} />
+          <View style={styles.cardContent}>
+            <Text numberOfLines={1} style={styles.cardTitle}>{note.title || 'Без названия'}</Text>
+            <Text numberOfLines={3} style={styles.cardBody}>{note.content || 'Пустая заметка'}</Text>
+            <Text style={styles.cardMeta}>{formatDate(note.updatedAt)}</Text>
+          </View>
+        </Pressable>
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+
 function makeStyles(p: ThemePalette) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: p.background },
@@ -155,11 +274,29 @@ function makeStyles(p: ThemePalette) {
     emptyList: { flexGrow: 1 },
     errorWrap: { paddingHorizontal: 24 },
     card: { minHeight: 132, flexDirection: 'row', overflow: 'hidden', borderRadius: 24, borderWidth: 1, borderColor: p.border, backgroundColor: p.surface, elevation: 2, shadowColor: '#000', shadowOpacity: p.mode === 'dark' ? 0.18 : 0.06, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+    cardInner: { flex: 1, flexDirection: 'row' },
     cardAccent: { width: 6, backgroundColor: p.accent },
     cardContent: { flex: 1, paddingHorizontal: 18, paddingVertical: 16 },
     cardTitle: { color: p.text, fontSize: 19, fontWeight: '900' },
     cardBody: { color: p.mutedText, fontSize: 15, lineHeight: 21, marginTop: 7 },
     cardMeta: { color: p.accent, fontSize: 12, fontWeight: '800', marginTop: 11 },
     pressed: { opacity: 0.78, transform: [{ scale: 0.99 }] },
+    // Temporary drop targets (spec §6): fixed/absolute so they never occupy
+    // list flow and only exist in the tree while a drag is in progress.
+    // Delete sits at the bottom (root and class view); All Notes sits at
+    // the top (class view only) per spec §6's diagram.
+    deleteZone: {
+      position: 'absolute', left: 20, right: 20, bottom: 24, minHeight: 64,
+      borderRadius: 20, alignItems: 'center', justifyContent: 'center',
+      backgroundColor: p.danger, elevation: 4, shadowColor: '#000',
+      shadowOpacity: 0.2, shadowRadius: 10, shadowOffset: { width: 0, height: 4 },
+    },
+    deleteZoneLabel: { color: p.onAccent, fontSize: 16, fontWeight: '800' },
+    allNotesZone: {
+      position: 'absolute', left: 20, right: 20, top: 12, minHeight: 56,
+      borderRadius: 18, alignItems: 'center', justifyContent: 'center',
+      backgroundColor: p.accentSoft, borderWidth: 1, borderColor: p.accent,
+    },
+    allNotesZoneLabel: { color: p.accent, fontSize: 15, fontWeight: '800' },
   });
 }

@@ -114,7 +114,7 @@ export default function App({ bootstrap = createAppStores }: AppProps) {
           <View style={styles.app}>
             <View style={styles.content}>
               {tab === 'notes' ? (
-                <NotesScreen store={stores.notes} classesStore={stores.classes} palette={palette} />
+                <NotesScreen store={stores.notes} classesStore={stores.classes} db={stores.db} palette={palette} />
               ) : (
                 <ListsScreen store={stores.lists} palette={palette} />
               )}
