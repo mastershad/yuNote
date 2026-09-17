@@ -93,3 +93,19 @@ export async function runLocalOperation<T>(db:OpSqliteDb,input:{
   if (!outcome) throw new Error('local operation completed without an outcome');
   return outcome;
 }
+
+// Deliberately not a second journal system: no operationId, no idempotency
+// ledger, no events array. Its only job is to name a transaction as
+// local-only at the call site -- for mutations that are outside the
+// synchronized dataset boundary and must never touch dataset_state,
+// mutation_journal, or applied_operations at all.
+export async function runLocalOnlyTransaction<T>(
+  db:OpSqliteDb,
+  execute:(tx:OpSqliteExecutor)=>Promise<T>,
+):Promise<T> {
+  let result:T|undefined;
+  await db.transaction(async(tx)=>{
+    result=await execute(tx);
+  });
+  return result as T;
+}

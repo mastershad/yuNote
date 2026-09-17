@@ -1,5 +1,5 @@
 import { openMigratedDatabase } from '../../src/db/connection';
-import { runLocalOperation, OperationPayloadMismatchError } from '../../src/data/localOperation';
+import { runLocalOperation, runLocalOnlyTransaction, OperationPayloadMismatchError } from '../../src/data/localOperation';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -102,6 +102,38 @@ describe('runLocalOperation', () => {
         { sequence:0, entity_type:'note', entity_id:'n1' },
         { sequence:1, entity_type:'note', entity_id:'n2' },
       ]);
+    } finally { db.close(); }
+  });
+});
+
+describe('runLocalOnlyTransaction', () => {
+  let dir:string;
+  beforeEach(() => { dir=mkdtempSync(join(tmpdir(),'yunote-local-only-')); });
+  afterEach(() => rmSync(dir,{ recursive:true, force:true }));
+
+  it('commits its own writes and returns the callback result, without touching sync bookkeeping', async () => {
+    const db=await openMigratedDatabase({ name:'test.sqlite', location:dir });
+    try {
+      const result=await runLocalOnlyTransaction(db, async(tx)=>{
+        await tx.execute("INSERT INTO classes (id,name,created_at,updated_at,rev,position) VALUES ('c1','Работа','t','t',1,0)");
+        return { id:'c1' };
+      });
+      expect(result).toEqual({ id:'c1' });
+      expect((await db.execute('SELECT id,name FROM classes')).rows).toEqual([{ id:'c1', name:'Работа' }]);
+      expect((await db.execute('SELECT revision FROM dataset_state')).rows).toEqual([{ revision:0 }]);
+      expect((await db.execute('SELECT * FROM mutation_journal')).rows).toEqual([]);
+      expect((await db.execute('SELECT * FROM applied_operations')).rows).toEqual([]);
+    } finally { db.close(); }
+  });
+
+  it('rolls back its writes if the callback throws', async () => {
+    const db=await openMigratedDatabase({ name:'test.sqlite', location:dir });
+    try {
+      await expect(runLocalOnlyTransaction(db, async(tx)=>{
+        await tx.execute("INSERT INTO classes (id,name,created_at,updated_at,rev,position) VALUES ('c1','Работа','t','t',1,0)");
+        throw new Error('simulated crash');
+      })).rejects.toThrow('simulated crash');
+      expect((await db.execute('SELECT * FROM classes')).rows).toEqual([]);
     } finally { db.close(); }
   });
 });
