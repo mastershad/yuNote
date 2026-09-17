@@ -1992,10 +1992,13 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `src/ui/NotesScreen.tsx`
 - Modify: `src/ui/ClassCard.tsx` (hover-reaction styling only)
+- Modify: `src/interaction/useNoteDrag.ts` (add `hoveredTargetId` state — see
+  the exact diff in Step 3; Task 9's shipped hook does not track hover, so
+  this task must add it, not just consume it)
 - Test: `test/ui/classesFlow.test.tsx`
 
 **Interfaces:**
-- Consumes: `useNoteDrag` (Task 9).
+- Consumes: `useNoteDrag` (Task 9) as it exists today: `{ draggingId, animation, registerTarget, unregisterTarget, useDragForNote }` — no `hoveredTargetId` yet.
 - Produces: pickup/drag/drop visuals on every `NoteCard`, temporary Delete (root and class view) and "All Notes" (class view only) targets that render only while a drag is in progress, and `ClassCard`'s hover reaction when a dragged note is over it.
 
 This is the highest-risk task in the plan — the piece spec §3/§12 explicitly flags for on-device iteration. Get the wiring structurally correct here; treat exact timing/feel as provisional until Task 12.
@@ -2089,7 +2092,52 @@ Add the two temporary targets, rendered only when `drag.draggingId !== null`:
 
 Add corresponding styles (`deleteZone`, `deleteZoneLabel`, `allNotesZone`, `allNotesZoneLabel`) to `makeStyles`, positioned per spec §6's diagram (bottom for delete, top for "All Notes", both fixed/absolute so they don't shift list layout when they appear).
 
-Give `ClassCard` a `hovered: boolean` prop (default `false`) that applies spec §7's hover styling (`scale: 1.03–1.05`, `backgroundColor: accentSoft`) when true — `NotesScreen` passes this based on whether `drag.draggingId !== null` and the current pointer is over that class's registered rect (derive this from the same `dropTargetRegistry.hitTest` result `useNoteDrag` already computes on `onMove`, surfaced as a small piece of hook state, e.g. `drag.hoveredTargetId`).
+**First, add hover tracking to `src/interaction/useNoteDrag.ts`** (Task 9's
+shipped hook computes `registry.hitTest(point)` inside `onDrop` but never
+during `onMove`, and exposes no hover state at all — this task needs both).
+Apply this exact diff:
+
+```diff
+   const registry = useRef(createDropTargetRegistry()).current;
+   const [draggingId, setDraggingId] = useState<string | null>(null);
++  const [hoveredTargetId, setHoveredTargetId] = useState<string | null>(null);
+   const animation = useDragAnimation();
+```
+
+```diff
+       onPickUp: () => { setDraggingId(noteId); animation.playPickUp(); },
+-      onMove: (_id, point) => animation.playMove(point),
++      onMove: (_id, point) => {
++        animation.playMove(point);
++        setHoveredTargetId(registry.hitTest(point));
++      },
+       onDrop: async (_id, point) => {
+         const targetId = registry.hitTest(point);
+         const targetType = targetId ? (idToType(targetId) ?? targetTypeFor(targetId)) : null;
+         if (targetId && targetType) {
+           await animation.playDropSuccess(point);
+           await resolveDrop({ screen: context.screen, draggedId: noteId, targetId, targetType }, fns);
+         } else {
+           await animation.playCancel();
+         }
+         animation.reset();
+         setDraggingId(null);
++        setHoveredTargetId(null);
+       },
+       onCancel: async () => {
+         await animation.playCancel();
+         animation.reset();
+         setDraggingId(null);
++        setHoveredTargetId(null);
+       },
+```
+
+```diff
+-  return { draggingId, animation, registerTarget, unregisterTarget, useDragForNote };
++  return { draggingId, hoveredTargetId, animation, registerTarget, unregisterTarget, useDragForNote };
+```
+
+Give `ClassCard` a `hovered: boolean` prop (default `false`) that applies spec §7's hover styling (`scale: 1.03–1.05`, `backgroundColor: accentSoft`) when true — `NotesScreen` passes `hovered={drag.hoveredTargetId === klass.id}` for each rendered `ClassCard`, using the `hoveredTargetId` state just added above.
 
 - [ ] **Step 4: Run tests**
 
@@ -2109,7 +2157,7 @@ If a device is connected, install and launch, and attempt one long-press-and-dra
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/ui/NotesScreen.tsx src/ui/ClassCard.tsx App.tsx src/app/stores.ts test/ui/classesFlow.test.tsx
+git add src/ui/NotesScreen.tsx src/ui/ClassCard.tsx src/interaction/useNoteDrag.ts App.tsx src/app/stores.ts test/ui/classesFlow.test.tsx
 git commit -m "feat(ui): wire drag pickup/move/drop into NotesScreen
 
 Every note card is now a drag source via useNoteDrag; Delete and
