@@ -72,4 +72,36 @@ describe('runLocalOperation', () => {
       expect(replay).toEqual({ replayed:true,revision:1,result:{ message:'готово',status:'applied' } });
     } finally { db.close(); }
   });
+
+  it('never journals a class event, even when mixed with a journaled event', async () => {
+    const db=await openMigratedDatabase({ name:'test.sqlite', location:dir });
+    try {
+      await runLocalOperation(db,{ operationId:'op-mixed', request:{}, execute:async()=>({
+        result:{ status:'applied' }, events:[
+          { entityType:'class', entityId:'c1', mutation:'upsert', payload:{ id:'c1', name:'Работа' } },
+          { entityType:'note', entityId:'n1', mutation:'upsert', payload:{ id:'n1', title:'Идея' } },
+        ],
+      })});
+      const rows=(await db.execute('SELECT sequence,entity_type,entity_id FROM mutation_journal ORDER BY sequence')).rows;
+      expect(rows).toEqual([{ sequence:0, entity_type:'note', entity_id:'n1' }]);
+    } finally { db.close(); }
+  });
+
+  it('keeps journal sequence dense when a class event is interleaved between journaled events', async () => {
+    const db=await openMigratedDatabase({ name:'test.sqlite', location:dir });
+    try {
+      await runLocalOperation(db,{ operationId:'op-interleaved', request:{}, execute:async()=>({
+        result:{ status:'applied' }, events:[
+          { entityType:'note', entityId:'n1', mutation:'upsert', payload:{ id:'n1', title:'Первая' } },
+          { entityType:'class', entityId:'c1', mutation:'upsert', payload:{ id:'c1', name:'Работа' } },
+          { entityType:'note', entityId:'n2', mutation:'upsert', payload:{ id:'n2', title:'Вторая' } },
+        ],
+      })});
+      const rows=(await db.execute('SELECT sequence,entity_type,entity_id FROM mutation_journal ORDER BY sequence')).rows;
+      expect(rows).toEqual([
+        { sequence:0, entity_type:'note', entity_id:'n1' },
+        { sequence:1, entity_type:'note', entity_id:'n2' },
+      ]);
+    } finally { db.close(); }
+  });
 });

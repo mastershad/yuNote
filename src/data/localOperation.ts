@@ -71,18 +71,21 @@ export async function runLocalOperation<T>(db:OpSqliteDb,input:{
       'INSERT INTO applied_operations (operation_id,request_json,result_json,dataset_revision,created_at) VALUES (?,?,?,?,?)',
       [input.operationId,requestJson,resultJson,revision,createdAt],
     );
-    for (let sequence=0;sequence<executed.events.length;sequence++) {
-      const event=executed.events[sequence];
+    let journalSequence=0;
+    for (let index=0;index<executed.events.length;index++) {
+      const event=executed.events[index];
       if (event.entityId.trim().length===0) throw new Error('journal entityId must not be empty');
       if (event.mutation==='upsert' && event.payload===undefined) throw new Error('journal upsert requires payload');
       if (event.mutation==='delete' && event.payload!==undefined) throw new Error('journal delete must not contain payload');
+      if (event.entityType==='class') continue; // Classes are outside the synchronized dataset boundary -- never written to mutation_journal, regardless of what else the same local operation touched.
       await tx.execute(
         `INSERT INTO mutation_journal
          (dataset_revision,sequence,operation_id,entity_type,entity_id,mutation,payload_json,created_at)
          VALUES (?,?,?,?,?,?,?,?)`,
-        [revision,sequence,input.operationId,event.entityType,event.entityId,event.mutation,
-          event.payload===undefined ? null : canonicalJson(event.payload,`events[${sequence}].payload`),createdAt],
+        [revision,journalSequence,input.operationId,event.entityType,event.entityId,event.mutation,
+          event.payload===undefined ? null : canonicalJson(event.payload,`events[${index}].payload`),createdAt],
       );
+      journalSequence++;
     }
     await tx.execute('UPDATE dataset_state SET revision = ? WHERE singleton = 1',[revision]);
     outcome={ replayed:false, revision, result:executed.result };
