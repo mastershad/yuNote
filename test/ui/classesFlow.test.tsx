@@ -107,7 +107,12 @@ describe('NotesScreen: Classes navigation and merged feed', () => {
   });
 
   it('a class with a member count shows it, not a content preview', async () => {
-    const { notesStore, classesStore } = stores([], [klass({ id: 'c1' })], { c1: 3 });
+    // listClassNoteCounts (src/data/classes.ts) never emits an entry for a
+    // class with zero member notes -- that's the real case NotesScreen's
+    // `noteCounts[item.klass.id] ?? 0` fallback guards against, so this
+    // fixture deliberately omits c1 from the counts map rather than giving
+    // it an explicit count, or a removed `?? 0` would go undetected here.
+    const { notesStore, classesStore } = stores([], [klass({ id: 'c1' })], {});
 
     let tree!: TestRenderer.ReactTestRenderer;
     await act(async () => {
@@ -120,18 +125,19 @@ describe('NotesScreen: Classes navigation and merged feed', () => {
     // reads the rendered Text nodes directly rather than JSON.stringify(card)
     // (or JSON.stringify(tree.toJSON())) -- both throw "Converting circular
     // structure to JSON" in this React 19 / react-test-renderer 19
-    // environment (a FlatList row's fiber tree carries a back-reference,
-    // via the VirtualizedList CellRenderer's stateNode / a React element's
-    // _owner, that neither raw JSON.stringify nor the renderer's own
-    // toJSON() can serialize here). Checking the actual rendered text is
-    // the same assertion in substance -- does "undefined заметок" appear
-    // anywhere on screen -- without depending on JSON-serializability of
-    // the fiber tree.
+    // environment: any ReactTestInstance here carries a plain enumerable
+    // `_fiber` back-reference (fibers are inherently circular via
+    // return/child/sibling/alternate), which neither raw JSON.stringify nor
+    // the renderer's own toJSON() can serialize -- not specific to FlatList
+    // rows. Checking the actual rendered text is the same assertion in
+    // substance -- does "undefined заметок" appear anywhere on screen --
+    // without depending on JSON-serializability of the fiber tree.
     tree.root.findByProps({ testID: 'class-c1' });
     const renderedText = tree.root
       .findAllByType(Text)
       .map(instance => (Array.isArray(instance.props.children) ? instance.props.children.join('') : instance.props.children))
       .join(' | ');
+    expect(renderedText).toContain('0 заметок');
     expect(renderedText).not.toContain('undefined заметок');
   });
 });
