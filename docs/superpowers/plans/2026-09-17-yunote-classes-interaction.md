@@ -1634,10 +1634,18 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing test**
 
-Create `test/interaction/useDragAnimation.test.ts`:
+Create `test/interaction/useDragAnimation.test.ts`. Note: Task 7 (already
+implemented) established that `@testing-library/react-hooks` is NOT a
+dependency of this repo and deliberately chose not to add it, instead
+testing hooks via a small wrapper component using `react-test-renderer`
+(already a dependency) — see `test/interaction/useDraggable.test.ts` for
+the exact pattern. Translate the two tests below to that same
+wrapper-component harness rather than using `renderHook`/`act` from
+`@testing-library/react-hooks` as literally written; the assertions
+themselves are unchanged, only the rendering mechanism:
 
 ```ts
-import { renderHook, act } from '@testing-library/react-hooks';
+import { renderHook, act } from '@testing-library/react-hooks'; // translate to Task 7's react-test-renderer wrapper pattern -- see note above
 import { useDragAnimation } from '../../src/interaction/useDragAnimation';
 
 describe('useDragAnimation', () => {
