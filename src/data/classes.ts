@@ -99,6 +99,7 @@ export async function dissolveClassIfNeededInTransaction(tx: OpSqliteExecutor, c
 }
 
 export async function createClassFromNotes(db: OpSqliteDb, input: { noteAId: string; noteBId: string }): Promise<Class> {
+  if (input.noteAId === input.noteBId) throw new Error('Cannot create a class from a note and itself');
   const id = generateId();
   const outcome = await runLocalOperation(db, {
     operationId: generateId(),
