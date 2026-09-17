@@ -104,6 +104,19 @@ describe('runLocalOperation', () => {
       ]);
     } finally { db.close(); }
   });
+
+  it('rejects an operation whose events are all class-typed, since nothing would be journaled', async () => {
+    const db=await openMigratedDatabase({ name:'test.sqlite', location:dir });
+    try {
+      await expect(runLocalOperation(db,{ operationId:'op-class-only', request:{}, execute:async()=>({
+        result:{ status:'applied' }, events:[
+          { entityType:'class', entityId:'c1', mutation:'upsert', payload:{ id:'c1', name:'Работа' } },
+        ],
+      })})).rejects.toThrow('local operation must journal at least one non-class event');
+      expect((await db.execute('SELECT revision FROM dataset_state')).rows).toEqual([{ revision:0 }]);
+      expect((await db.execute('SELECT * FROM applied_operations')).rows).toEqual([]);
+    } finally { db.close(); }
+  });
 });
 
 describe('runLocalOnlyTransaction', () => {

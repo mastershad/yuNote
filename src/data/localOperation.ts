@@ -87,6 +87,7 @@ export async function runLocalOperation<T>(db:OpSqliteDb,input:{
       );
       journalSequence++;
     }
+    if (journalSequence===0) throw new Error('local operation must journal at least one non-class event');
     await tx.execute('UPDATE dataset_state SET revision = ? WHERE singleton = 1',[revision]);
     outcome={ replayed:false, revision, result:executed.result };
   });
