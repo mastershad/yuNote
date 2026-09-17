@@ -208,6 +208,14 @@ import { createNote, deleteNote } from '../../src/data/notes';
     await expect(createClassFromNotes(db, { noteAId: noteA.id, noteBId: 'missing' })).rejects.toThrow(/no longer exist/);
   });
 
+  it('createClassFromNotes rejects a note dropped onto itself (same id twice), rather than creating a 1-member class', async () => {
+    const noteA = await createNote(db, { title: 'A', content: '' });
+
+    await expect(createClassFromNotes(db, { noteAId: noteA.id, noteBId: noteA.id })).rejects.toThrow(/itself/);
+
+    expect(await listClasses(db)).toEqual([]); // no invariant-violating class left behind
+  });
+
   it('addNoteToClass adds an unclassified note to an existing class and touches the class', async () => {
     const klass = await createClass(db, 'Работа');
     const note = await createNote(db, { title: 'Идея', content: '' });
@@ -367,6 +375,7 @@ async function dissolveClassIfNeededInTransaction(tx: OpSqliteExecutor, classId:
 }
 
 export async function createClassFromNotes(db: OpSqliteDb, input: { noteAId: string; noteBId: string }): Promise<Class> {
+  if (input.noteAId === input.noteBId) throw new Error('Cannot create a class from a note and itself');
   const id = generateId();
   const outcome = await runLocalOperation(db, {
     operationId: generateId(),
