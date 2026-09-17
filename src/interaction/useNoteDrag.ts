@@ -6,6 +6,7 @@ import { useDragAnimation } from './useDragAnimation';
 import { createClassFromNotesAndReload, addNoteToClassAndReload, removeNoteFromClassAndReload } from '../state/classInteractions';
 import type { createNotesStore } from '../state/notesStore';
 import type { createClassesStore } from '../state/classesStore';
+import { androidDragFeedback, type DragFeedback } from './dragHaptics';
 
 type Screen = { view: 'root' } | { view: 'class'; classId: string };
 type TargetType = 'note' | 'class' | 'delete' | 'all-notes' | null;
@@ -51,10 +52,13 @@ export function useNoteDrag(context: {
   notesStore: ReturnType<typeof createNotesStore>;
   classesStore: ReturnType<typeof createClassesStore>;
   screen: Screen;
+  feedback?: DragFeedback;
 }) {
+  const feedback = context.feedback ?? androidDragFeedback;
   const registry = useRef(createDropTargetRegistry()).current;
   const [draggingId, setDraggingId] = useState<string | null>(null);
   const [hoveredTargetId, setHoveredTargetId] = useState<string | null>(null);
+  const lastHoveredRef = useRef<string | null>(null);
   const animation = useDragAnimation();
 
   const fns: DropResolutionFns = {
@@ -80,15 +84,19 @@ export function useNoteDrag(context: {
 
   function useDragForNote(noteId: string, measureOrigin: () => Rect, idToType: (id: string) => TargetType) {
     return useDraggable(noteId, measureOrigin, {
-      onPickUp: () => { setDraggingId(noteId); animation.playPickUp(); },
+      onPickUp: () => { setDraggingId(noteId); feedback.pickup(); animation.playPickUp(); },
       onMove: (_id, point) => {
         animation.playMove(point);
-        setHoveredTargetId(registry.hitTest(point));
+        const hit = registry.hitTest(point);
+        if (hit !== null && hit !== lastHoveredRef.current) feedback.targetEntered();
+        lastHoveredRef.current = hit;
+        setHoveredTargetId(hit);
       },
       onDrop: async (_id, point) => {
         const targetId = registry.hitTest(point);
         const targetType = targetId ? (idToType(targetId) ?? targetTypeFor(targetId)) : null;
         if (targetId && targetType) {
+          if (targetType === 'delete') feedback.deleteSuccess(); else feedback.dropSuccess();
           await animation.playDropSuccess(point);
           await resolveDrop({ screen: context.screen, draggedId: noteId, targetId, targetType }, fns);
         } else {
@@ -97,12 +105,14 @@ export function useNoteDrag(context: {
         animation.reset();
         setDraggingId(null);
         setHoveredTargetId(null);
+        lastHoveredRef.current = null;
       },
       onCancel: async () => {
         await animation.playCancel();
         animation.reset();
         setDraggingId(null);
         setHoveredTargetId(null);
+        lastHoveredRef.current = null;
       },
     });
   }
