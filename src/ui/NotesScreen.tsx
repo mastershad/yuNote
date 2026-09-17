@@ -45,6 +45,8 @@ export function NotesScreen(props: {
   const [editing, setEditing] = useState<Note | 'new' | null>(null);
   const [error, setError] = useState('');
   const styles = useMemo(() => makeStyles(props.palette), [props.palette]);
+  const deleteZoneRef = useRef<View>(null);
+  const allNotesZoneRef = useRef<View>(null);
 
   const drag = useNoteDrag({
     db: props.db,
@@ -163,16 +165,26 @@ export function NotesScreen(props: {
       )}
       {drag.draggingId !== null ? (
         <View
+          ref={deleteZoneRef}
           testID="drag-delete-zone"
-          onLayout={(e) => drag.registerTarget('delete-zone', e.nativeEvent.layout)}
+          onLayout={() => {
+            deleteZoneRef.current?.measureInWindow((x, y, width, height) => {
+              drag.registerTarget('delete-zone', { x, y, width, height });
+            });
+          }}
           style={styles.deleteZone}>
           <Text style={styles.deleteZoneLabel}>🗑 Удалить</Text>
         </View>
       ) : null}
       {drag.draggingId !== null && screen.view === 'class' ? (
         <View
+          ref={allNotesZoneRef}
           testID="drag-all-notes-zone"
-          onLayout={(e) => drag.registerTarget('all-notes-zone', e.nativeEvent.layout)}
+          onLayout={() => {
+            allNotesZoneRef.current?.measureInWindow((x, y, width, height) => {
+              drag.registerTarget('all-notes-zone', { x, y, width, height });
+            });
+          }}
           style={styles.allNotesZone}>
           <Text style={styles.allNotesZoneLabel}>↑ Все заметки</Text>
         </View>
@@ -211,9 +223,16 @@ function formatDate(iso: string): string {
 // under the list) -- ClassCard itself stays tap-only per spec §6, this is
 // purely plumbing around it.
 function DropTargetLayout(props: { id: string; drag: ReturnType<typeof useNoteDrag>; children: React.ReactNode }) {
+  const viewRef = useRef<View>(null);
   useEffect(() => () => props.drag.unregisterTarget(props.id), [props.drag, props.id]);
   return (
-    <View onLayout={(e) => props.drag.registerTarget(props.id, e.nativeEvent.layout)}>
+    <View
+      ref={viewRef}
+      onLayout={() => {
+        viewRef.current?.measureInWindow((x, y, width, height) => {
+          props.drag.registerTarget(props.id, { x, y, width, height });
+        });
+      }}>
       {props.children}
     </View>
   );
@@ -244,10 +263,11 @@ function DraggableNoteCard(props: {
     <GestureDetector gesture={gesture}>
       <Animated.View
         ref={cardRef}
-        onLayout={(e) => {
-          drag.registerTarget(note.id, e.nativeEvent.layout);
+        onLayout={() => {
           cardRef.current?.measureInWindow((x, y, width, height) => {
-            originRef.current = { x, y, width, height };
+            const rect = { x, y, width, height };
+            originRef.current = rect;
+            drag.registerTarget(note.id, rect);
           });
         }}
         style={[styles.card, isDragging && drag.animation.style]}>
