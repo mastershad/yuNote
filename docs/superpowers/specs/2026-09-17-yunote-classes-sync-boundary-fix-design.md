@@ -346,7 +346,65 @@ alongside it.
 - Migration passes `PRAGMA foreign_key_check` with zero violations afterward.
 - A freshly-created database (via `schema.sql` alone) has no `yunote_classes` table and no FK from either organization table to it.
 
-## 8. What this spec does not settle
+## 8. The snapshot/enrollment surface (found while planning, not in the original problem statement)
+
+`mutation_journal`/`journalUploader` is not the only place `classes` data
+crosses the client/server boundary. Found by reading every file that
+references `yunote_classes` directly, not just the ones §1 originally
+scoped:
+
+- **`cloud-platform/src/yunote/snapshotStore.ts`'s `readSnapshot`** reads
+  `yunote_classes` as part of a full per-user snapshot
+  (`{schemaVersion, classes, notes, lists, listItems}`), validated by
+  `cloud-platform/src/yunote/snapshot.ts`'s `validateSnapshot` (`classes`
+  is a required key, and every note/list's `classId` is cross-checked
+  against the snapshot's own `classes` array).
+- **`cloud-platform/src/yunote/installationStore.ts`'s enrollment flow**
+  calls `readSnapshot` live, during every `/yunote/installations/enroll`
+  request, to compute a `cloudHash` compared against the enrolling
+  client's own `snapshotHash` (conflict detection for a second device
+  joining an account with existing cloud data). This is the most urgent
+  finding here: once Task 6 drops `yunote_classes`, this call breaks
+  immediately — not a latent risk, a guaranteed crash on the next
+  enrollment attempt after that table is gone.
+- **`yuNote/src/sync/installationEnrollment.ts`'s `localSnapshotJson`**
+  (client-side) builds the matching hash input, and also currently
+  includes `classes` — needed for symmetry with the server's hash, not
+  because raw class data is transmitted (only the SHA-256 digest is
+  sent in the enroll request body, never the JSON itself).
+- **`cloud-platform/src/auth/yunoteSyncStore.ts`'s `deleteAllForUser`**
+  (the GDPR account-deletion path) prepares a
+  `DELETE FROM yunote_classes WHERE user_id = ?` statement at store
+  construction time — `db.prepare` on a dropped table throws
+  immediately, meaning this would break at store startup, not just at
+  call time.
+
+**Resolution:** `classes` comes out of the snapshot schema entirely, on
+both sides, matching classes never being able to reach another device
+at all — the same principle as the rest of this spec, applied to a
+different sync mechanism than the one §1 started from.
+`validateSnapshot`'s note/list `classId` cross-check against the
+snapshot's own `classes` array is removed along with it — `classId`
+becomes exactly as opaque here as it already is in the database schema
+(§5). `deleteAllForUser`'s class-purge statement is removed outright —
+nothing to purge server-side once the table doesn't exist.
+
+**What this does not build:** there is currently no client-side code
+that downloads and applies a snapshot (`grep` for `applySnapshot`/
+`installSnapshot`/`restoreSnapshot` across `yuNote/src` returns
+nothing) — the multi-device restore flow this schema exists for isn't
+implemented yet. So this spec does not design "how a second device
+reconstructs local Classes from a snapshot that no longer contains
+them." The direction, confirmed 2026-09-17: the already-opaque
+`classId` values still present on every note/list in the snapshot
+(§5's decision to keep them) are exactly what that future feature
+would group by — notes/lists sharing a `classId` imply a class existed
+on the originating device, reconstructable locally (with a default
+name, since the real name never traveled) without the server ever
+holding or transmitting one. Recorded here so the design intent isn't
+lost, not built now because nothing calls it yet.
+
+## 9. What this spec does not settle
 
 - **The Classes interaction/UI work itself** — that's
   `2026-09-17-yunote-classes-interaction-design.md`, a separate,
@@ -356,6 +414,10 @@ alongside it.
   leave the sync boundary.
 - **Any staged/backward-compatible rollout strategy** — explicitly not
   needed per §6; would need to be revisited if that premise ever changes.
+- **The multi-device snapshot-restore feature itself** — per §8, not
+  built yet on the client; this spec only keeps the schema it will
+  eventually use consistent with "classes never leave the originating
+  device."
 
 ## Self-Review Notes
 
@@ -367,14 +429,22 @@ alongside it.
   writing this rather than asserted independently.
 - **Scope check:** deliberately narrow — sync-boundary correctness only,
   kept separate from the interaction-model spec per explicit instruction
-  (§8). The one crossing is §3.2's `deleteClass` guard, which is a
+  (§9). The one crossing is §3.2's `deleteClass` guard, which is a
   Class-domain rule (owned by the interaction-model spec, amended there)
   rather than a sync-boundary rule — implemented here only because it's
   this fix's own prerequisite, called out explicitly rather than left to
-  look like scope creep.
+  look like scope creep. §8 widened the problem statement itself
+  (snapshot/enrollment, not just the journal path) after being found by
+  grepping every `yunote_classes` reference in the server repo, not just
+  the files §1 started from — the account-deletion crash in particular
+  would have shipped as a real incident if this pass had stopped at the
+  journal mechanism.
 - **Ambiguity check:** §3.2's rationale for moving `createClass`/
   `deleteClass` was the one place most likely to be read as "adding
   replay semantics to dead code" rather than the intended "removing
   inconsistency from already-dead code, at lower cost than leaving it
   alone" — made explicit rather than left to infer, including the actual
-  `grep` check that established they have no real call sites today.
+  `grep` check that established they have no real call sites today. §8's
+  "what this does not build" paragraph draws the same kind of line for
+  the snapshot-reconstruction feature — recording the design intent
+  without building against a consumer that doesn't exist yet.
