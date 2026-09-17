@@ -435,8 +435,22 @@ into tasks properly:
 - **Explicit whole-class delete.** Not part of the product requirement;
   a class only ever disappears via the auto-dissolve invariant (§4),
   never via a direct "delete this class" action. If that's ever wanted,
-  it's an additive UI affordance, not a data model change (`deleteClass`
-  already exists and already reflows contents correctly).
+  it's an additive UI affordance, not a data model change.
+
+  **Addendum, confirmed 2026-09-17 while planning the sync-boundary-fix
+  spec:** a class cannot be deleted while it still has member notes —
+  the only way out of membership is the §4 dissolve invariant, which
+  already guarantees a class never persists at 1 member. Consequently
+  `deleteClassInTransaction`'s existing member-reflow loop (reassigning
+  contained notes/lists to `classId: null` before deleting the row) is
+  not a real state a correctly-used `deleteClass` should ever reach —
+  it should instead reject deletion outright if any note/list still
+  references the class, matching that a class can only legitimately be
+  deleted once it's already empty. This is a required prerequisite for
+  `2026-09-17-yunote-classes-sync-boundary-fix-design.md` §3.2, where it
+  is what makes `deleteClass` unconditionally pure class-only (safe for
+  `runLocalOnlyTransaction`) rather than conditionally mixed depending
+  on whether the class happened to have members at call time.
 - **Whether/when to adopt Reanimated.** Conditional on findings from the
   manual device-testing pass in §10/§12 step 7, not decided here.
 - **Exact copy wording and pixel-level visual polish** beyond what §7

@@ -179,6 +179,33 @@ inconsistent with the invariant this fix establishes for the rest of the
 file, for no benefit to any real caller. This is a reduction in surface
 (one local-only path for the whole module), not new design work.
 
+**`deleteClass` needed one more fact before it could move, found while
+planning this task:** `deleteClassInTransaction` currently reflows any
+member notes/lists to `classId: null` before deleting the class row —
+meaning its emitted events are conditionally mixed (class + note/list) or
+conditionally pure (class only), depending on whether the class happened
+to have members at call time. Neither §3.1's fix nor a flat move to
+`runLocalOnlyTransaction` handles both shapes correctly: an empty-class
+delete routed through `runLocalOperation` would still hit the "revision
+with nothing journaled" gap from §2, since §3.1's fix only densifies
+sequences when *something* survives the class-event filter.
+
+Resolved by an explicit product rule (confirmed 2026-09-17, and now
+recorded as the source of truth in the interaction-model spec's §13
+addendum): **a class cannot be deleted while it still has member
+notes** — the only way out of membership is the dissolve invariant,
+which already guarantees a class never sits at 1 member. Enforcing this
+as a guard in `deleteClassInTransaction` (reject deletion if any
+note/list still references the class, instead of reflowing them) makes
+`deleteClass` unconditionally pure class-only — there is no longer a
+data-dependent shape to handle, and it moves onto
+`runLocalOnlyTransaction` exactly like `createClass` and `renameClass`,
+no special-casing needed. This guard is a Class-domain rule owned by the
+interaction-model spec (see its §4/§13), not a sync-boundary concern —
+it's implemented as part of this plan only because it's this fix's
+prerequisite for `deleteClass` specifically, not because this spec
+claims the rule.
+
 ## 4. Server fix — explicit rejection, not silent tolerance
 
 `cloud-platform/src/yunote/journalBatchValidator.ts`: remove `'class'`
@@ -287,12 +314,30 @@ alongside it.
 ## 7. Testing strategy
 
 **Client (`test/data/localOperation.test.ts`, `test/data/classes.test.ts`):**
-- A class-only mutation (`renameClass`) does not change `dataset_state.revision`.
+- A class-only mutation (`renameClass`, `createClass`, `deleteClass` on an
+  empty class) does not change `dataset_state.revision`.
 - A class-only mutation produces zero rows in `mutation_journal`.
-- A mixed operation with events `[class, note]` journals only the note event, at `sequence=0`.
-- A mixed operation with events `[note, class, note]` journals both note events, at `sequence=0` and `sequence=1` — proving the invariant is "sequence reflects journaled order," not "sequence skips index N," which the two-event case alone can't distinguish.
-- `createClassFromNotes` still journals both required note `classId` changes (mixed operations keep their real sync-relevant side effects).
-- Note deletion that triggers class dissolution journals the note deletion event but no class event.
+- `deleteClass` rejects deletion of a class that still has a member note
+  or list, rather than reflowing them (§3.2's new guard) — this replaces
+  the existing `test/data/classes.test.ts` case that currently asserts
+  the opposite (deleting a class with a member note succeeds and nulls
+  its `class_id`); that test's expectation is now wrong on purpose and
+  gets updated, not just extended.
+- A **synthetic** mixed operation (a test-only `execute()` callback
+  passed directly to `runLocalOperation`, not a real repository
+  function) with events `[class, note]` journals only the note event, at
+  `sequence=0`.
+- The same synthetic approach with events `[note, class, note]` journals
+  both note events, at `sequence=0` and `sequence=1` — proving the
+  invariant is "sequence reflects journaled order," not "sequence skips
+  index N," which the two-event case alone can't distinguish.
+- Synthetic, not real, because no real mixed-shaped operation
+  (`createClassFromNotes`, `addNoteToClass`, `removeNoteFromClass`, or
+  dissolve-triggering note deletion) exists in the codebase yet — those
+  are the interaction-model spec's own data-layer tasks, not this plan's.
+  **When that plan implements them, its own tests must include this same
+  check against the real functions** — this spec's synthetic tests prove
+  the mechanism works, not that every future caller uses it correctly.
 
 **Server (`cloud-platform/test/yunote/journalBatchValidator.test.ts`, `journalBatchStore.test.ts`, `db.test.ts`):**
 - `entityType: 'class'` is rejected by the validator with an explicit error, not silently dropped.
@@ -322,7 +367,11 @@ alongside it.
   writing this rather than asserted independently.
 - **Scope check:** deliberately narrow — sync-boundary correctness only,
   kept separate from the interaction-model spec per explicit instruction
-  (§8).
+  (§8). The one crossing is §3.2's `deleteClass` guard, which is a
+  Class-domain rule (owned by the interaction-model spec, amended there)
+  rather than a sync-boundary rule — implemented here only because it's
+  this fix's own prerequisite, called out explicitly rather than left to
+  look like scope creep.
 - **Ambiguity check:** §3.2's rationale for moving `createClass`/
   `deleteClass` was the one place most likely to be read as "adding
   replay semantics to dead code" rather than the intended "removing
