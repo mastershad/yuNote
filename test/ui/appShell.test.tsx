@@ -23,7 +23,15 @@ function fakeStores(): AppStores {
     toggleItem: jest.fn(),
     removeItem: jest.fn(),
   }));
-  return { notes, lists, requestSync:jest.fn(), close: jest.fn() } as unknown as AppStores;
+  const classes = create(() => ({
+    classes: [],
+    noteCounts: {},
+    loadClasses: jest.fn().mockResolvedValue(undefined),
+    createClass: jest.fn(),
+    deleteClass: jest.fn(),
+    renameClass: jest.fn(),
+  }));
+  return { notes, lists, classes, requestSync:jest.fn(), close: jest.fn() } as unknown as AppStores;
 }
 
 describe('App shell', () => {

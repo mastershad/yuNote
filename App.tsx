@@ -73,10 +73,11 @@ export default function App({ bootstrap = createAppStores }: AppProps) {
     if (!stores) return;
     const subscription = AppState.addEventListener('change', nextState => {
       if (nextState !== 'active') return;
-      const noteOptions = stores.notes.getState().lastLoadOptions ?? { sort: 'date-desc' as const };
+      const noteOptions = stores.notes.getState().lastLoadOptions ?? { classId: null, sort: 'date-desc' as const };
       void Promise.all([
         stores.notes.getState().loadNotes(noteOptions),
         stores.lists.getState().loadLists(),
+        stores.classes.getState().loadClasses(),
       ]).catch(() => {
         // The next explicit screen action will retry; keep the current local view usable.
       });
@@ -113,7 +114,7 @@ export default function App({ bootstrap = createAppStores }: AppProps) {
           <View style={styles.app}>
             <View style={styles.content}>
               {tab === 'notes' ? (
-                <NotesScreen store={stores.notes} palette={palette} />
+                <NotesScreen store={stores.notes} classesStore={stores.classes} palette={palette} />
               ) : (
                 <ListsScreen store={stores.lists} palette={palette} />
               )}

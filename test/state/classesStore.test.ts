@@ -47,4 +47,26 @@ describe('classes store', () => {
 
     expect(store.getState().classes.map((c) => c.name)).toEqual(['Быт', 'Работа']);
   });
+
+  it('renameClass updates the slice in place', async () => {
+    const store = createClassesStore(db);
+    const cls = await store.getState().createClass('Работа');
+
+    const renamed = await store.getState().renameClass(cls.id, 'Проекты');
+
+    expect(renamed.name).toBe('Проекты');
+    expect(store.getState().classes.map((c) => c.name)).toEqual(['Проекты']);
+  });
+
+  it('loadClasses also loads noteCounts', async () => {
+    const store = createClassesStore(db);
+    const cls = await store.getState().createClass('Работа');
+
+    await store.getState().loadClasses();
+
+    expect(store.getState().noteCounts).toEqual({});
+    // 0 members isn't in the map at all (matches listClassNoteCounts, which
+    // only returns classes with at least one member) -- not the same as {[cls.id]: 0}.
+    expect(store.getState().noteCounts[cls.id]).toBeUndefined();
+  });
 });
