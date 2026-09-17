@@ -319,6 +319,25 @@ transition window: this is a pre-production, single-developer app. If
 that ever stops being true, this ordering decision needs revisiting
 alongside it.
 
+**Pre-deploy check, added after implementation (both final whole-branch
+reviews independently found this):** shipping the client fix stops
+*new* class events from being journaled, but does not remove any
+`entity_type:'class'` rows that might already be sitting, unacked, in a
+real device's local `mutation_journal` from before this fix. Once the
+server ships and starts explicitly rejecting `entityType:'class'`
+(§4), any such pre-existing row would make every subsequent journal
+upload from that device fail with a 400, permanently, since the
+rejected batch is never accepted and the device has no way to skip
+past it. Production's `yunote_classes` having zero rows does not rule
+this out — it's equally consistent with "a class was created locally
+and its journal row never successfully uploaded." Before deploying the
+server change, run `SELECT COUNT(*) FROM mutation_journal WHERE
+entity_type='class'` against each real device's local database; if
+non-zero, clear that installation's local app data rather than
+attempting a partial row delete (a partial delete risks leaving a
+revision with zero journaled rows, which is the same "gap" shape this
+whole fix exists to prevent — see §2).
+
 ## 7. Testing strategy
 
 **Client (`test/data/localOperation.test.ts`, `test/data/classes.test.ts`):**
