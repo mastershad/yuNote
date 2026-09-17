@@ -5,6 +5,7 @@ import TestRenderer, { act } from 'react-test-renderer';
 import { NotesScreen } from '../../src/ui/NotesScreen';
 import { getThemePalette } from '../../src/ui/theme';
 import type { Note } from '../../src/data/notes';
+import type { Class } from '../../src/data/classes';
 
 function note(id = 'n1'): Note {
   return {
@@ -33,13 +34,28 @@ function notesStore(initial: Note[] = []) {
   return { store, createNote, updateNote, deleteNote };
 }
 
+function classesStore(initial: Class[] = []) {
+  const createClass = jest.fn(async (name: string) => ({ id: 'c1', name, createdAt: '', updatedAt: '', rev: 1, position: 0 }));
+  const deleteClass = jest.fn(async () => undefined);
+  const renameClass = jest.fn(async (id: string, name: string) => ({ id, name, createdAt: '', updatedAt: '', rev: 2, position: 0 }));
+  const store = create(() => ({
+    classes: initial,
+    noteCounts: {} as Record<string, number>,
+    loadClasses: jest.fn(async () => undefined),
+    createClass,
+    deleteClass,
+    renameClass,
+  }));
+  return { store, createClass, deleteClass, renameClass };
+}
+
 describe('NotesScreen', () => {
   it('creates a note from the editor', async () => {
     const model = notesStore();
     let tree!: TestRenderer.ReactTestRenderer;
     await act(async () => {
       tree = TestRenderer.create(
-        <NotesScreen store={model.store as never} palette={getThemePalette('light')} />,
+        <NotesScreen store={model.store as never} classesStore={classesStore().store as never} palette={getThemePalette('light')} />,
       );
     });
 
@@ -67,7 +83,7 @@ describe('NotesScreen', () => {
     let tree!: TestRenderer.ReactTestRenderer;
     await act(async () => {
       tree = TestRenderer.create(
-        <NotesScreen store={model.store as never} palette={getThemePalette('dark')} />,
+        <NotesScreen store={model.store as never} classesStore={classesStore().store as never} palette={getThemePalette('dark')} />,
       );
     });
     await act(async () => tree.root.findByProps({ testID: 'note-n1' }).props.onPress());

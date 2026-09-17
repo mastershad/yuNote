@@ -1,54 +1,128 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { Note } from '../data/notes';
+import type { Class } from '../data/classes';
 import { createNotesStore } from '../state/notesStore';
+import { createClassesStore } from '../state/classesStore';
 import { EmptyState, FloatingAddButton, InlineError, ScreenHeader } from './components';
+import { ClassCard } from './ClassCard';
+import { ClassViewHeader } from './ClassViewHeader';
 import { NoteEditor } from './NoteEditor';
 import type { ThemePalette } from './theme';
 
+type ScreenState = { view: 'root' } | { view: 'class'; classId: string; className: string };
+type FeedItem = { type: 'note'; note: Note } | { type: 'class'; klass: Class };
+
+function mergeRootFeed(notes: Note[], classes: Class[]): FeedItem[] {
+  const items: FeedItem[] = [
+    ...notes.map((note): FeedItem => ({ type: 'note', note })),
+    ...classes.map((klass): FeedItem => ({ type: 'class', klass })),
+  ];
+  return items.sort((a, b) => {
+    const aTime = a.type === 'note' ? a.note.updatedAt : a.klass.updatedAt;
+    const bTime = b.type === 'note' ? b.note.updatedAt : b.klass.updatedAt;
+    return bTime.localeCompare(aTime);
+  });
+}
+
 export function NotesScreen(props: {
   store: ReturnType<typeof createNotesStore>;
+  classesStore: ReturnType<typeof createClassesStore>;
   palette: ThemePalette;
 }) {
   const notes = props.store(state => state.notes);
+  const classes = props.classesStore(state => state.classes);
+  const noteCounts = props.classesStore(state => state.noteCounts);
+  const [screen, setScreen] = useState<ScreenState>({ view: 'root' });
   const [editing, setEditing] = useState<Note | 'new' | null>(null);
   const [error, setError] = useState('');
   const styles = useMemo(() => makeStyles(props.palette), [props.palette]);
 
   useEffect(() => {
-    props.store.getState().loadNotes({ sort: 'date-desc' }).catch(loadError => {
+    const loadForScreen = screen.view === 'root'
+      ? props.store.getState().loadNotes({ classId: null, sort: 'date-desc' })
+      : props.store.getState().loadNotes({ classId: screen.classId, sort: 'date-desc' });
+    Promise.all([loadForScreen, props.classesStore.getState().loadClasses()]).catch(loadError => {
       setError(loadError instanceof Error ? loadError.message : 'Не удалось загрузить заметки');
     });
-  }, [props.store]);
+  }, [props.store, props.classesStore, screen]);
 
   const selectedNote = editing === 'new' || editing === null ? null : editing;
+  const feed = screen.view === 'root' ? mergeRootFeed(notes, classes) : null;
 
   return (
     <View testID="notes-screen" style={styles.screen}>
-      <ScreenHeader eyebrow="YUNOTE" title="Заметки" subtitle="Ваши мысли всегда рядом." palette={props.palette} />
+      {screen.view === 'root' ? (
+        <ScreenHeader eyebrow="YUNOTE" title="Заметки" subtitle="Ваши мысли всегда рядом." palette={props.palette} />
+      ) : (
+        <ClassViewHeader
+          name={screen.className}
+          onBack={() => setScreen({ view: 'root' })}
+          onRename={async (name) => {
+            const renamed = await props.classesStore.getState().renameClass(screen.classId, name);
+            setScreen({ view: 'class', classId: renamed.id, className: renamed.name });
+          }}
+          palette={props.palette}
+        />
+      )}
       {error ? <View style={styles.errorWrap}><InlineError message={error} palette={props.palette} /></View> : null}
-      <FlatList
-        data={notes}
-        keyExtractor={item => item.id}
-        contentContainerStyle={notes.length ? styles.list : styles.emptyList}
-        renderItem={({ item }) => (
-          <Pressable
-            testID={`note-${item.id}`}
-            onPress={() => setEditing(item)}
-            style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
-            <View style={styles.cardAccent} />
-            <View style={styles.cardContent}>
-              <Text numberOfLines={1} style={styles.cardTitle}>{item.title || 'Без названия'}</Text>
-              <Text numberOfLines={3} style={styles.cardBody}>{item.content || 'Пустая заметка'}</Text>
-              <Text style={styles.cardMeta}>{formatDate(item.updatedAt)}</Text>
-            </View>
-          </Pressable>
-        )}
-        ListEmptyComponent={
-          <EmptyState symbol="✎" title="Здесь появятся заметки" body="Сохраните первую мысль — она останется на телефоне." palette={props.palette} />
-        }
-      />
-      <FloatingAddButton testID="add-note" label="Добавить заметку" onPress={() => setEditing('new')} palette={props.palette} />
+      {screen.view === 'root' ? (
+        <FlatList
+          data={feed as FeedItem[]}
+          keyExtractor={item => (item.type === 'note' ? item.note.id : item.klass.id)}
+          contentContainerStyle={feed && feed.length ? styles.list : styles.emptyList}
+          renderItem={({ item }) =>
+            item.type === 'class' ? (
+              <ClassCard
+                klass={item.klass}
+                noteCount={noteCounts[item.klass.id] ?? 0}
+                onPress={() => setScreen({ view: 'class', classId: item.klass.id, className: item.klass.name })}
+                palette={props.palette}
+              />
+            ) : (
+              <Pressable
+                testID={`note-${item.note.id}`}
+                onPress={() => setEditing(item.note)}
+                style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
+                <View style={styles.cardAccent} />
+                <View style={styles.cardContent}>
+                  <Text numberOfLines={1} style={styles.cardTitle}>{item.note.title || 'Без названия'}</Text>
+                  <Text numberOfLines={3} style={styles.cardBody}>{item.note.content || 'Пустая заметка'}</Text>
+                  <Text style={styles.cardMeta}>{formatDate(item.note.updatedAt)}</Text>
+                </View>
+              </Pressable>
+            )
+          }
+          ListEmptyComponent={
+            <EmptyState symbol="✎" title="Здесь появятся заметки" body="Сохраните первую мысль — она останется на телефоне." palette={props.palette} />
+          }
+        />
+      ) : (
+        <FlatList
+          data={notes}
+          keyExtractor={item => item.id}
+          contentContainerStyle={notes.length ? styles.list : styles.emptyList}
+          renderItem={({ item }) => (
+            <Pressable
+              testID={`note-${item.id}`}
+              onPress={() => setEditing(item)}
+              style={({ pressed }) => [styles.card, pressed && styles.pressed]}>
+              <View style={styles.cardAccent} />
+              <View style={styles.cardContent}>
+                <Text numberOfLines={1} style={styles.cardTitle}>{item.title || 'Без названия'}</Text>
+                <Text numberOfLines={3} style={styles.cardBody}>{item.content || 'Пустая заметка'}</Text>
+                <Text style={styles.cardMeta}>{formatDate(item.updatedAt)}</Text>
+              </View>
+            </Pressable>
+          )}
+          ListEmptyComponent={
+            <EmptyState symbol="✎" title="Класс пуст" body="Перетащите сюда заметку с главного экрана." palette={props.palette} />
+          }
+        />
+      )}
+      {screen.view === 'root' ? (
+        <FloatingAddButton testID="add-note" label="Добавить заметку" onPress={() => setEditing('new')} palette={props.palette} />
+      ) : null}
       <NoteEditor
         visible={editing !== null}
         note={selectedNote}
@@ -89,4 +163,3 @@ function makeStyles(p: ThemePalette) {
     pressed: { opacity: 0.78, transform: [{ scale: 0.99 }] },
   });
 }
-
