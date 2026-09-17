@@ -59,6 +59,30 @@ describe('installation enrollment client',()=>{
     }finally{db.close();}
   });
 
+  it('hashes exactly {schemaVersion,notes,lists,listItems} -- no classes -- and is unaffected by a locally-created class',async()=>{
+    const expectedHash=sha256(JSON.stringify({schemaVersion:1,notes:[],lists:[],listItems:[]}));
+    const makeClient=(db:Awaited<ReturnType<typeof openMigratedDatabase>>,observed:Array<Record<string,unknown>>,installationId:string)=>
+      createInstallationEnrollmentClient({db,keyProvider:createInMemoryInstallationKeyProvider({create:()=>({publicKeyPem:'public',sign:()=>''}),sha256Utf8:sha256}),
+        baseUrl:'https://cloud.example',generateId:()=>installationId,
+        request:async(_url,init)=>{const sent=JSON.parse(init.body);observed.push(sent);return {status:201,json:async()=>({installationId:sent.installationId,bindingId:'binding-1',replicaId:sent.replicaId,generation:sent.generation,keyVersion:sent.keyVersion,appliedRevision:0})};}});
+
+    const db1=await openMigratedDatabase({name:'test.sqlite',location:dir});
+    const observed1:Array<Record<string,unknown>>=[];
+    try{
+      await makeClient(db1,observed1,'55555555-5555-4555-8555-555555555555').enroll('e'.repeat(64));
+      expect(observed1[0]?.snapshotHash).toBe(expectedHash);
+    }finally{db1.close();}
+
+    const dir2=mkdtempSync(join(tmpdir(),'yunote-enrollment-class-'));
+    const db2=await openMigratedDatabase({name:'test.sqlite',location:dir2});
+    const observed2:Array<Record<string,unknown>>=[];
+    try{
+      await db2.execute("INSERT INTO classes (id,name,created_at,updated_at,rev,position) VALUES ('c1','Работа','t','t',1,0)");
+      await makeClient(db2,observed2,'66666666-6666-4666-8666-666666666666').enroll('f'.repeat(64));
+      expect(observed2[0]?.snapshotHash).toBe(expectedHash);
+    }finally{db2.close();rmSync(dir2,{recursive:true,force:true});}
+  });
+
   it('requires TLS for enrollment transport',async()=>{
     const db=await openMigratedDatabase({name:'test.sqlite',location:dir});
     try{
