@@ -182,15 +182,14 @@ import { createNote, deleteNote } from '../../src/data/notes';
   it('createClassFromNotes journals both note upserts (mixed operation, no class event journaled)', async () => {
     const noteA = await createNote(db, { title: 'A', content: '' });
     const noteB = await createNote(db, { title: 'B', content: '' });
-    const journalBefore = (await db.execute('SELECT COUNT(*) as c FROM mutation_journal')).rows?.[0];
 
     await createClassFromNotes(db, { noteAId: noteA.id, noteBId: noteB.id });
 
     const events = (await db.execute('SELECT entity_type,entity_id,mutation FROM mutation_journal ORDER BY dataset_revision,sequence')).rows ?? [];
     expect(events.every((e) => e.entity_type !== 'class')).toBe(true);
-    expect(events.filter((e) => e.entity_type === 'note' && e.mutation === 'upsert')).toHaveLength(
-      2 + Number((journalBefore as { c: number }).c > 0 ? 0 : 0),
-    );
+    // 4 total note-upsert events in this test: one per createNote call (2),
+    // plus one per note reassigned to the new class inside createClassFromNotes (2).
+    expect(events.filter((e) => e.entity_type === 'note' && e.mutation === 'upsert')).toHaveLength(4);
   });
 
   it('createClassFromNotes rejects if either note already belongs to a class (stale assumption)', async () => {
