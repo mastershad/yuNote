@@ -33,12 +33,11 @@ function rowToMetadata(row:Record<string,unknown>):EnrollmentMetadata {
 }
 
 async function localSnapshotJson(db:OpSqliteDb):Promise<string>{
-  const classes=(await db.execute('SELECT id,name,rev,created_at AS createdAt,updated_at AS updatedAt,position FROM classes ORDER BY position,id')).rows??[];
   const notes=(await db.execute('SELECT id,title,content,class_id AS classId,rev,created_at AS createdAt,updated_at AS updatedAt,position FROM notes ORDER BY position,id')).rows??[];
   const lists=(await db.execute('SELECT id,title,class_id AS classId,rev,created_at AS createdAt,updated_at AS updatedAt,position FROM lists ORDER BY position,id')).rows??[];
   const itemRows=(await db.execute('SELECT id,list_id AS listId,text,checked,rev,created_at AS createdAt,updated_at AS updatedAt,position FROM list_items ORDER BY position,id')).rows??[];
   const listItems=itemRows.map(row=>({...row,checked:row.checked===1}));
-  return JSON.stringify({schemaVersion:1,classes,notes,lists,listItems});
+  return JSON.stringify({schemaVersion:1,notes,lists,listItems});
 }
 
 export function createInstallationEnrollmentClient(deps:{db:OpSqliteDb;keyProvider:InstallationKeyProvider;baseUrl:string;request?:EnrollmentRequest;generateId?:()=>string;now?:()=>string}) {
