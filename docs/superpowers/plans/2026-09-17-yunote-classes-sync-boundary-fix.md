@@ -847,8 +847,10 @@ describe('migrateYunoteDropClassSync', () => {
 
   it('a fresh database\'s organization tables have no FK to yunote_classes', () => {
     const db = openDatabase(':memory:');
-    const fks = db.prepare("PRAGMA foreign_key_list(yunote_note_organization)").all() as { table: string }[];
-    expect(fks.some(fk => fk.table === 'yunote_classes')).toBe(false);
+    const noteFks = db.prepare("PRAGMA foreign_key_list(yunote_note_organization)").all() as { table: string }[];
+    expect(noteFks.some(fk => fk.table === 'yunote_classes')).toBe(false);
+    const listFks = db.prepare("PRAGMA foreign_key_list(yunote_list_organization)").all() as { table: string }[];
+    expect(listFks.some(fk => fk.table === 'yunote_classes')).toBe(false);
   });
 
   it('migrating an existing database with yunote_classes preserves organization rows, position, and opaque class_id values', () => {
@@ -871,18 +873,28 @@ describe('migrateYunoteDropClassSync', () => {
       INSERT INTO users (user_id) VALUES ('u1');
       INSERT INTO yunote_notes (user_id,id,title,content,rev,created_at,updated_at) VALUES ('u1','n1','T','C',1,'t','t');
       INSERT INTO yunote_notes (user_id,id,title,content,rev,created_at,updated_at) VALUES ('u1','n2','T2','C2',1,'t','t');
+      INSERT INTO yunote_lists (user_id,id,title,rev,created_at,updated_at) VALUES ('u1','l1','L',1,'t','t');
       INSERT INTO yunote_classes (id,user_id,name,rev,created_at,updated_at,position) VALUES ('c1','u1','Работа',1,'t','t',0);
       INSERT INTO yunote_note_organization (user_id,id,class_id,position) VALUES ('u1','n1','c1',3);
       INSERT INTO yunote_note_organization (user_id,id,class_id,position) VALUES ('u1','n2',NULL,7);
+      INSERT INTO yunote_list_organization (user_id,id,class_id,position) VALUES ('u1','l1','c1',5);
     `);
 
     migrateYunoteDropClassSync(raw);
 
-    const rows = raw.prepare('SELECT id,class_id,position FROM yunote_note_organization ORDER BY id').all();
-    expect(rows).toEqual([
+    const noteRows = raw.prepare('SELECT id,class_id,position FROM yunote_note_organization ORDER BY id').all();
+    expect(noteRows).toEqual([
       { id: 'n1', class_id: 'c1', position: 3 },
       { id: 'n2', class_id: null, position: 7 },
     ]);
+    // yunote_list_organization's migration block is a hand-copied twin of
+    // yunote_note_organization's (same rename/recreate/copy/drop shape,
+    // different table/parent-table names) -- exercised here with real,
+    // non-default data (non-NULL class_id, non-zero position) so a
+    // copy-paste error specific to this block (wrong source table, wrong
+    // parent reference) would actually fail a test, not pass silently.
+    const listRows = raw.prepare('SELECT id,class_id,position FROM yunote_list_organization ORDER BY id').all();
+    expect(listRows).toEqual([{ id: 'l1', class_id: 'c1', position: 5 }]);
     const table = raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='yunote_classes'").get();
     expect(table).toBeUndefined();
     const violations = raw.pragma('foreign_key_check');
@@ -962,19 +974,27 @@ function migrateYunoteDropClassSync(db: Database.Database): void {
     db.exec('DROP TABLE yunote_list_organization_old');
 
     db.exec('DROP TABLE yunote_classes');
+
+    // No existing migration in this codebase verifies FK integrity after a
+    // structural change -- added specifically here because this migration
+    // recreates two FK-bearing tables under foreign_keys=ON, and a silent
+    // dangling reference would only surface later as an opaque write
+    // failure on an unrelated note/list update. New precedent, not an
+    // established one. Run and checked INSIDE the transaction, as the
+    // last statement, so a violation triggers an automatic ROLLBACK --
+    // the migration either fully applies with a verified-clean schema, or
+    // it leaves the database completely untouched and retryable on the
+    // next boot. Checking this AFTER the transaction commits would be
+    // strictly worse: a violation would already be permanent, and the
+    // tableExists guard above would then treat the (broken) migration as
+    // already applied on every subsequent boot, silently swallowing the
+    // failure forever instead of surfacing it again.
+    const violations = db.pragma('foreign_key_check') as unknown[];
+    if (violations.length > 0) {
+      throw new Error(`Post-migration foreign key check found ${violations.length} violation(s)`);
+    }
   });
   migrate();
-
-  // No existing migration in this codebase verifies FK integrity after a
-  // structural change -- added specifically here because this migration
-  // recreates two FK-bearing tables under foreign_keys=ON, and a silent
-  // dangling reference would only surface later as an opaque write
-  // failure on an unrelated note/list update. New precedent, not an
-  // established one.
-  const violations = db.pragma('foreign_key_check') as unknown[];
-  if (violations.length > 0) {
-    throw new Error(`Post-migration foreign key check found ${violations.length} violation(s)`);
-  }
 }
 ```
 
