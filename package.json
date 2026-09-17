@@ -12,6 +12,7 @@
     "@op-engineering/op-sqlite": "^18.2.0",
     "react": "19.2.3",
     "react-native": "0.86.0",
+    "react-native-gesture-handler": "^3.3.0",
     "react-native-get-random-values": "^1.11.0",
     "uuid": "^11.0.5",
     "zustand": "^5.0.14"

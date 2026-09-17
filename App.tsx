@@ -10,6 +10,7 @@ import {
   useColorScheme,
   View,
 } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { createAppStores, type AppStores } from './src/app/stores';
 import { NotesScreen } from './src/ui/NotesScreen';
 import { ListsScreen } from './src/ui/ListsScreen';
@@ -85,58 +86,60 @@ export default function App({ bootstrap = createAppStores }: AppProps) {
   }, [stores]);
 
   return (
-    <View style={styles.safeArea}>
-      <StatusBar
-        barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
-        backgroundColor={palette.statusBar}
-      />
-      {!stores && !startupError ? (
-        <View style={styles.center} testID="startup-loading">
-          <View style={styles.brandMark}><Text style={styles.brandEmoji}>🦝</Text></View>
-          <ActivityIndicator size="large" color={palette.accent} />
-          <Text style={styles.muted}>Открываем ваши заметки…</Text>
-        </View>
-      ) : null}
-      {!stores && startupError ? (
-        <View style={styles.center} testID="startup-error">
-          <View style={styles.brandMark}><Text style={styles.brandEmoji}>🦝</Text></View>
-          <Text style={styles.errorTitle}>Не удалось открыть заметки</Text>
-          <Text style={styles.muted}>{startupError}</Text>
-          <Pressable testID="startup-retry" onPress={retry} style={styles.primaryButton}>
-            <Text style={styles.primaryButtonText}>Повторить</Text>
-          </Pressable>
-        </View>
-      ) : null}
-      {stores ? (
-        <View style={styles.app}>
-          <View style={styles.content}>
-            {tab === 'notes' ? (
-              <NotesScreen store={stores.notes} palette={palette} />
-            ) : (
-              <ListsScreen store={stores.lists} palette={palette} />
-            )}
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <View style={styles.safeArea}>
+        <StatusBar
+          barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
+          backgroundColor={palette.statusBar}
+        />
+        {!stores && !startupError ? (
+          <View style={styles.center} testID="startup-loading">
+            <View style={styles.brandMark}><Text style={styles.brandEmoji}>🦝</Text></View>
+            <ActivityIndicator size="large" color={palette.accent} />
+            <Text style={styles.muted}>Открываем ваши заметки…</Text>
           </View>
-          <View style={styles.tabBar}>
-            <TabButton
-              label="Заметки"
-              symbol="▤"
-              selected={tab === 'notes'}
-              onPress={() => setTab('notes')}
-              testID="tab-notes"
-              palette={palette}
-            />
-            <TabButton
-              label="Списки"
-              symbol="✓"
-              selected={tab === 'lists'}
-              onPress={() => setTab('lists')}
-              testID="tab-lists"
-              palette={palette}
-            />
+        ) : null}
+        {!stores && startupError ? (
+          <View style={styles.center} testID="startup-error">
+            <View style={styles.brandMark}><Text style={styles.brandEmoji}>🦝</Text></View>
+            <Text style={styles.errorTitle}>Не удалось открыть заметки</Text>
+            <Text style={styles.muted}>{startupError}</Text>
+            <Pressable testID="startup-retry" onPress={retry} style={styles.primaryButton}>
+              <Text style={styles.primaryButtonText}>Повторить</Text>
+            </Pressable>
           </View>
-        </View>
-      ) : null}
-    </View>
+        ) : null}
+        {stores ? (
+          <View style={styles.app}>
+            <View style={styles.content}>
+              {tab === 'notes' ? (
+                <NotesScreen store={stores.notes} palette={palette} />
+              ) : (
+                <ListsScreen store={stores.lists} palette={palette} />
+              )}
+            </View>
+            <View style={styles.tabBar}>
+              <TabButton
+                label="Заметки"
+                symbol="▤"
+                selected={tab === 'notes'}
+                onPress={() => setTab('notes')}
+                testID="tab-notes"
+                palette={palette}
+              />
+              <TabButton
+                label="Списки"
+                symbol="✓"
+                selected={tab === 'lists'}
+                onPress={() => setTab('lists')}
+                testID="tab-lists"
+                palette={palette}
+              />
+            </View>
+          </View>
+        ) : null}
+      </View>
+    </GestureHandlerRootView>
   );
 }
 
