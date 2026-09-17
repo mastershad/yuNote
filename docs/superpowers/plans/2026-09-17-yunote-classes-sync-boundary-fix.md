@@ -233,10 +233,13 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `src/data/classes.ts`
 - Test: `test/data/classes.test.ts`
+- Test: `test/data/repositoryJournal.test.ts`
 
 **Interfaces:**
 - Consumes: `runLocalOnlyTransaction` from Task 2.
 - Produces: `renameClass(db: OpSqliteDb, id: string, name: string): Promise<Class>` (new — the interaction-model plan's future rename-in-place UI task will call this directly). `createClass`/`deleteClass` keep their existing signatures; `deleteClassInTransaction`'s signature changes from `Promise<JournalEvent[]>` to `Promise<void>` (confirmed via `grep` to have no callers outside this file).
+
+**Found during Task 1's review, not in this task's original scope:** `test/data/repositoryJournal.test.ts` (a third test file touching class journaling, missed by this plan's original file survey) has two tests whose expectations this task invalidates twice over — once because `createClass`/`deleteClass` stop consuming `dataset_state.revision` at all, and again because `deleteClass` now rejects a non-empty class outright rather than reflowing its members, which is exactly what one of the two tests' scenario does. Step 4 below rewrites both — this is not optional cleanup, the suite does not pass without it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -379,18 +382,74 @@ import { runLocalOnlyTransaction, type JournalEvent } from './localOperation';
 
 `updateNoteInTransaction`/`updateListInTransaction` were only used by the old reflow loop this task removes — confirmed by this task's own rewrite, not left to a follow-up check. `runLocalOperation` is no longer called anywhere in this file (`createClass`/`deleteClass`/`renameClass` all move to `runLocalOnlyTransaction`), so its import is replaced rather than added-to. `JournalEvent` stays — `createClassInTransaction` still returns one.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 4: Rewrite `test/data/repositoryJournal.test.ts`'s two class-touching tests**
 
-Run: `npx jest test/data/classes.test.ts`
-Expected: PASS — all tests in the file.
+Replace the file's first test (currently `'journals class creation and class deletion with every affected note in one revision'`, lines 14-41) — its `deleteClass` call on a class with a member note and list now throws (this task's new guard), so the scenario itself is invalid, not just its expected values. Replace it with a test of what's actually true after this task: creating a class never advances `dataset_state.revision` or writes to `mutation_journal`, even when real synced entities are created in the same class:
+
+```ts
+  it('creating a class never advances dataset_state.revision or writes to mutation_journal, even alongside real synced entities',async()=>{
+    const db=await openMigratedDatabase({ name:'test.sqlite',location:dir });
+    try {
+      const klass=await createClass(db,'Работа');
+      const note=await createNote(db,{ title:'Идея',content:'Текст',classId:klass.id });
+      const list=await createList(db,'Задачи',{ classId:klass.id });
+      expect(klass).toMatchObject({ name:'Работа',rev:1,position:0,updatedAt:klass.createdAt });
+
+      expect((await db.execute('SELECT revision FROM dataset_state')).rows).toEqual([{ revision:2 }]);
+      const events=(await db.execute('SELECT dataset_revision,sequence,entity_type,entity_id,mutation,payload_json FROM mutation_journal ORDER BY dataset_revision,sequence')).rows ?? [];
+      expect(events).toHaveLength(2);
+      expect(events.map(row=>({ revision:row.dataset_revision,sequence:row.sequence,type:row.entity_type,mutation:row.mutation }))).toEqual([
+        { revision:1,sequence:0,type:'note',mutation:'upsert' },
+        { revision:2,sequence:0,type:'list',mutation:'upsert' },
+      ]);
+      expect(JSON.parse(events[0].payload_json as string)).toMatchObject({ id:note.id,classId:klass.id,rev:1 });
+      expect(JSON.parse(events[1].payload_json as string)).toMatchObject({ id:list.id,classId:klass.id,rev:1 });
+    } finally { db.close(); }
+  });
+```
+
+Replace the file's second test (currently `'journals lists and items with class membership and position while retaining legacy outbox compatibility'`, lines 43-65) — its scenario stays valid (it never deletes the class), only the revision numbers and event indices shift down by one now that `createClass` no longer consumes a revision:
+
+```ts
+  it('journals lists and items with class membership and position while retaining legacy outbox compatibility',async()=>{
+    const db=await openMigratedDatabase({ name:'test.sqlite',location:dir });
+    try {
+      const klass=await createClass(db,'Дом');
+      const list=await createList(db,'Покупки',{ classId:klass.id });
+      const item=await addListItem(db,list.id,'Хлеб');
+      const updated=await updateListItem(db,item.id,{ checked:true });
+      expect(list).toMatchObject({ classId:klass.id,position:0 });
+      expect(updated).toMatchObject({ checked:true,rev:2,position:0 });
+      await deleteList(db,list.id);
+
+      expect((await db.execute('SELECT revision FROM dataset_state')).rows).toEqual([{ revision:4 }]);
+      const events=(await db.execute('SELECT dataset_revision,entity_type,mutation,payload_json FROM mutation_journal ORDER BY dataset_revision')).rows ?? [];
+      expect(events.map(row=>[row.dataset_revision,row.entity_type,row.mutation])).toEqual([
+        [1,'list','upsert'],[2,'listItem','upsert'],[3,'listItem','upsert'],[4,'list','delete'],
+      ]);
+      expect(JSON.parse(events[0].payload_json as string)).toMatchObject({ id:list.id,classId:klass.id,position:0 });
+      expect(JSON.parse(events[2].payload_json as string)).toMatchObject({ id:item.id,checked:true,position:0 });
+      expect((await db.execute('SELECT entity_type,entity_id,deleted FROM sync_outbox')).rows).toEqual([
+        { entity_type:'list',entity_id:list.id,deleted:1 },
+      ]);
+    } finally { db.close(); }
+  });
+```
+
+No import changes needed in this file — it already imports `createClass`/`deleteClass` from `../../src/data/classes` and doesn't need `renameClass` or `deleteClassInTransaction` directly.
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+Run: `npx jest test/data/classes.test.ts test/data/repositoryJournal.test.ts`
+Expected: PASS — all tests in both files.
 
 Run: `npx tsc --noEmit`
 Expected: PASS — catches any leftover unused import or type mismatch from the `deleteClassInTransaction` signature change (`Promise<JournalEvent[]>` → `Promise<void>`).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/data/classes.ts test/data/classes.test.ts
+git add src/data/classes.ts test/data/classes.test.ts test/data/repositoryJournal.test.ts
 git commit -m "feat(classes): guard deleteClass, add renameClass, go local-only
 
 A class can't be deleted while it has member notes or lists -- the
@@ -399,6 +458,10 @@ membership. This makes deleteClass unconditionally pure class-only,
 so it -- along with createClass and the new renameClass -- can use
 runLocalOnlyTransaction instead of runLocalOperation. None of the
 three touch dataset_state/mutation_journal/applied_operations anymore.
+repositoryJournal.test.ts's two class-touching integration tests are
+rewritten to match: one because its deleteClass-on-a-non-empty-class
+scenario no longer applies, the other because revision/event indices
+shift now that creating a class doesn't consume a shared revision.
 
 Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 ```
@@ -1127,6 +1190,8 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 **Spec coverage:** §3.1 (mixed-operation fix) → Task 1. §3.2 (`runLocalOnlyTransaction` + migrating class-only operations + the `deleteClass` guard) → Tasks 2-3. §4 (server rejection) → Tasks 4-5. §5 (schema migration) → Task 6. §6 (deployment order) → reflected in task ordering (client tasks 1-3, then server tasks 4-8, with Task 9 — the other client-side piece — placed after Task 7 since it depends on Task 7's shape). §7's test list → covered across Tasks 1-6. §8 (snapshot/enrollment surface, added after the spec's second revision) → Tasks 7-9.
 
 **Placeholder scan:** none — every step has real code, real file paths, real line-number anchors read directly from the current source, not described abstractly. Task 7's test-file step is the one place this plan describes changes per-test rather than pasting a full replacement file (unlike Task 5's equivalent situation) — a deliberate choice given the file's size and how entangled classes are with nearly every test in it, but each item is still a concrete instruction (delete this test and why; remove these lines; change this expected value to that one), not a vague "update accordingly."
+
+**Execution-time amendment (2026-09-17):** Task 1's implementer surfaced a fifth hidden fixture during execution — `test/data/repositoryJournal.test.ts`, missed by every prior survey pass (both the spec's own and this plan's). Task 3 now includes rewriting its two class-touching tests (Step 4), with the exact replacement content worked out and verified against Task 3's actual post-fix behavior before being added here, the same standard as every other task in this plan. Recorded here rather than silently folded in, since it's a real gap this plan shipped with initially, not a refinement.
 
 **Type consistency:** `runLocalOnlyTransaction<T>(db, execute)` signature is identical everywhere it's referenced (Task 2's definition, Task 3's three call sites). `deleteClassInTransaction`'s new `Promise<void>` return type is consistent between Task 3's Step 3 definition and its (absence of) other callers, confirmed by the `grep` result cited in the spec. `renameClass`'s signature (`db, id, name` → `Promise<Class>`) matches what the spec's §4-linked interaction-model addendum describes it will be called with later. `YunoteSnapshot`'s shape after Task 7 (`{schemaVersion, notes, lists, listItems}`) is identical to `localSnapshotJson`'s shape after Task 9 — checked against each other explicitly, since a silent mismatch here is exactly what would cause the spurious-conflict failure mode Task 9's rationale describes.
 
