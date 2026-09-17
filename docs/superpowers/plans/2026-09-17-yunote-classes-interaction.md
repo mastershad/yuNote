@@ -153,11 +153,14 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `test/data/classes.test.ts` (same file, same `describe` block, same `openMigratedDatabase`/`mkdtempSync` setup already there — import `createNote`, `deleteNote` from `../../src/data/notes` alongside the existing imports):
+Add to `test/data/classes.test.ts` (same file, same `describe` block, same `openMigratedDatabase`/`mkdtempSync` setup already there). Two import changes: add a new import line for `notes.ts`, and extend the existing `classes.ts` import line with the four new functions this task adds — the tests below use all of them, so both must be updated or the tests fail on missing imports, not on real assertions:
 
 ```ts
+import { createClass, deleteClass, renameClass, createClassFromNotes, addNoteToClass, removeNoteFromClass, listClassNoteCounts, listClasses } from '../../src/data/classes';
 import { createNote, deleteNote } from '../../src/data/notes';
 ```
+
+(the first line replaces the file's current `import { createClass, deleteClass, renameClass, listClasses } from '../../src/data/classes';` — same source, four more names.)
 
 ```ts
   it('createClassFromNotes groups two unclassified notes into a new class named "Новый класс"', async () => {
@@ -285,14 +288,35 @@ import { createNote, deleteNote } from '../../src/data/notes';
   });
 ```
 
-Also add to `test/data/notes.test.ts` (check its existing import list and add `createClassFromNotes`/`listClasses` from `../../src/data/classes` alongside):
+Also add to `test/data/notes.test.ts`. Add `createClassFromNotes, listClasses` from `../../src/data/classes` to its imports — both tests below call them, so (unlike the case above) this addition is actually load-bearing, not just a stale instruction to double-check:
+
+```ts
+import { createClassFromNotes, listClasses } from '../../src/data/classes';
+```
 
 ```ts
   it('deleting an unclassified note does not touch any class', async () => {
-    const note = await createNote(db, { title: 'A', content: '' });
-    await deleteNote(db, note.id);
-    // No assertion needed beyond "does not throw" -- this is the pre-existing
-    // behavior; the new dissolve-check branch must be a no-op when classId is null.
+    const klass = await createClassFromNotes(db, {
+      noteAId: (await createNote(db, { title: 'A', content: '' })).id,
+      noteBId: (await createNote(db, { title: 'B', content: '' })).id,
+    });
+    const unrelated = await createNote(db, { title: 'Unrelated', content: '' });
+
+    await deleteNote(db, unrelated.id);
+
+    expect(await listClasses(db)).toEqual([klass]); // untouched -- the dissolve-check branch is a no-op when classId is null
+  });
+
+  it('deleting a classified note that leaves the class with 1 member dissolves it (notes.ts entry point)', async () => {
+    const noteA = await createNote(db, { title: 'A', content: '' });
+    const noteB = await createNote(db, { title: 'B', content: '' });
+    await createClassFromNotes(db, { noteAId: noteA.id, noteBId: noteB.id });
+
+    await deleteNote(db, noteA.id);
+
+    expect(await listClasses(db)).toEqual([]);
+    const { rows } = await db.execute('SELECT class_id FROM notes WHERE id=?', [noteB.id]);
+    expect((rows?.[0] as { class_id: string | null }).class_id).toBeNull();
   });
 ```
 
