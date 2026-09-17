@@ -1,6 +1,6 @@
 import { openMigratedDatabase, type OpSqliteDb } from '../../src/db/connection';
 import { createNote, updateNote, deleteNote, listNotes } from '../../src/data/notes';
-import { createClass } from '../../src/data/classes';
+import { createClass, createClassFromNotes, listClasses } from '../../src/data/classes';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -140,5 +140,29 @@ describe('notes repository', () => {
 
   it('deleteNote throws when the note does not exist', async () => {
     await expect(deleteNote(db, 'does-not-exist')).rejects.toThrow('Note not found: does-not-exist');
+  });
+
+  it('deleting an unclassified note does not touch any class', async () => {
+    const klass = await createClassFromNotes(db, {
+      noteAId: (await createNote(db, { title: 'A', content: '' })).id,
+      noteBId: (await createNote(db, { title: 'B', content: '' })).id,
+    });
+    const unrelated = await createNote(db, { title: 'Unrelated', content: '' });
+
+    await deleteNote(db, unrelated.id);
+
+    expect(await listClasses(db)).toEqual([klass]); // untouched -- the dissolve-check branch is a no-op when classId is null
+  });
+
+  it('deleting a classified note that leaves the class with 1 member dissolves it (notes.ts entry point)', async () => {
+    const noteA = await createNote(db, { title: 'A', content: '' });
+    const noteB = await createNote(db, { title: 'B', content: '' });
+    await createClassFromNotes(db, { noteAId: noteA.id, noteBId: noteB.id });
+
+    await deleteNote(db, noteA.id);
+
+    expect(await listClasses(db)).toEqual([]);
+    const { rows } = await db.execute('SELECT class_id FROM notes WHERE id=?', [noteB.id]);
+    expect((rows?.[0] as { class_id: string | null }).class_id).toBeNull();
   });
 });

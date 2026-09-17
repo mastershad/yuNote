@@ -2,6 +2,7 @@ import type { OpSqliteDb, OpSqliteExecutor } from '../db/connection';
 import { generateId, nowIso } from './id';
 import { markDirty } from './syncOutbox';
 import { runLocalOperation, type JournalEvent } from './localOperation';
+import { dissolveClassIfNeededInTransaction } from './classes';
 
 export interface Note {
   id: string;
@@ -92,11 +93,14 @@ export async function updateNote(
 }
 
 export async function deleteNoteInTransaction(tx:OpSqliteExecutor,id:string):Promise<JournalEvent[]> {
-  const { rows }=await tx.execute('SELECT id FROM notes WHERE id=?',[id]);
+  const { rows }=await tx.execute('SELECT class_id FROM notes WHERE id=?',[id]);
   if (!rows?.length) throw new Error(`Note not found: ${id}`);
+  const classId=(rows[0] as unknown as { class_id:string|null }).class_id;
   await tx.execute('DELETE FROM notes WHERE id=?',[id]);
   await markDirty(tx,'note',id,true);
-  return [{ entityType:'note',entityId:id,mutation:'delete' }];
+  const events:JournalEvent[]=[{ entityType:'note', entityId:id, mutation:'delete' }];
+  if (classId!==null) events.push(...await dissolveClassIfNeededInTransaction(tx,classId));
+  return events;
 }
 
 export async function deleteNote(db: OpSqliteDb, id: string): Promise<void> {
