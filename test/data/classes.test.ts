@@ -1,5 +1,5 @@
 import { openMigratedDatabase, type OpSqliteDb } from '../../src/db/connection';
-import { createClass, deleteClass, listClasses } from '../../src/data/classes';
+import { createClass, deleteClass, renameClass, listClasses } from '../../src/data/classes';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -38,20 +38,54 @@ describe('classes repository', () => {
     expect(all.length).toBe(1);
   });
 
-  it('deleteClass removes the class but does not delete its notes -- their class_id becomes NULL', async () => {
+  it('deleteClass rejects deleting a class that still has a member note', async () => {
     const cls = await createClass(db, 'Работа');
     await db.execute(
       'INSERT INTO notes (id, title, content, class_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
       ['note-1', 'Идея', 'текст', cls.id, '2026-09-07T00:00:00.000Z', '2026-09-07T00:00:00.000Z'],
     );
 
+    await expect(deleteClass(db, cls.id)).rejects.toThrow(/member notes/);
+
+    expect(await listClasses(db)).toEqual([cls]);
+  });
+
+  it('deleteClass rejects deleting a class that still has a member list', async () => {
+    const cls = await createClass(db, 'Работа');
+    await db.execute(
+      'INSERT INTO lists (id, title, class_id, position, purpose, sharing_mode, rev, created_at, updated_at) VALUES (?, ?, ?, 0, ?, ?, 1, ?, ?)',
+      ['list-1', 'Покупки', cls.id, 'generic', 'personal', '2026-09-07T00:00:00.000Z', '2026-09-07T00:00:00.000Z'],
+    );
+
+    await expect(deleteClass(db, cls.id)).rejects.toThrow(/member lists/);
+
+    expect(await listClasses(db)).toEqual([cls]);
+  });
+
+  it('deleteClass succeeds once the class has no member notes or lists', async () => {
+    const cls = await createClass(db, 'Пустой класс');
+
     await deleteClass(db, cls.id);
 
-    const remainingClasses = await listClasses(db);
-    expect(remainingClasses).toEqual([]);
+    expect(await listClasses(db)).toEqual([]);
+  });
 
-    const { rows } = await db.execute('SELECT * FROM notes WHERE id = ?', ['note-1']);
-    expect(rows?.length).toBe(1);
-    expect(rows?.[0]?.class_id).toBeNull();
+  it('createClass, deleteClass, and renameClass never touch dataset_state.revision or mutation_journal', async () => {
+    const cls = await createClass(db, 'Работа');
+    const renamed = await renameClass(db, cls.id, 'Проекты');
+    await deleteClass(db, renamed.id);
+
+    expect((await db.execute('SELECT revision FROM dataset_state')).rows).toEqual([{ revision:0 }]);
+    expect((await db.execute('SELECT * FROM mutation_journal')).rows).toEqual([]);
+  });
+
+  it('renameClass updates the name and bumps rev', async () => {
+    const cls = await createClass(db, 'Работа');
+
+    const renamed = await renameClass(db, cls.id, 'Проекты');
+
+    expect(renamed.name).toBe('Проекты');
+    expect(renamed.rev).toBe(cls.rev + 1);
+    expect(await listClasses(db)).toEqual([renamed]);
   });
 });

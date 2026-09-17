@@ -1,8 +1,6 @@
 import type { OpSqliteDb, OpSqliteExecutor } from '../db/connection';
 import { generateId, nowIso } from './id';
-import { runLocalOperation, type JournalEvent } from './localOperation';
-import { updateNoteInTransaction } from './notes';
-import { updateListInTransaction } from './lists';
+import { runLocalOnlyTransaction, type JournalEvent } from './localOperation';
 
 export interface Class {
   id: string;
@@ -36,36 +34,39 @@ export async function createClassInTransaction(tx:OpSqliteExecutor,input:{ id:st
 
 export async function createClass(db: OpSqliteDb, name: string): Promise<Class> {
   const id = generateId();
-  const outcome=await runLocalOperation(db,{ operationId:generateId(),request:{ action:'createClass',id,name },execute:async(tx)=>{
-    const created=await createClassInTransaction(tx,{ id,name });
-    return { result:created.klass,events:created.events };
-  }});
-  return outcome.result;
+  return runLocalOnlyTransaction(db, async (tx) => {
+    const created = await createClassInTransaction(tx, { id, name });
+    return created.klass;
+  });
 }
 
-export async function deleteClassInTransaction(tx:OpSqliteExecutor,id:string):Promise<JournalEvent[]> {
+export async function deleteClassInTransaction(tx:OpSqliteExecutor,id:string):Promise<void> {
   const { rows:classRows }=await tx.execute('SELECT id FROM classes WHERE id=?',[id]);
   if (!classRows?.length) throw new Error(`Class not found: ${id}`);
-  const { rows:noteRows }=await tx.execute('SELECT id FROM notes WHERE class_id=? ORDER BY id',[id]);
-  const events:JournalEvent[]=[];
-  for (const row of (noteRows ?? []) as { id:string }[]) {
-    const updated=await updateNoteInTransaction(tx,row.id,{ classId:null });
-    events.push(...updated.events);
-  }
-  const { rows:listRows }=await tx.execute('SELECT id FROM lists WHERE class_id=? ORDER BY id',[id]);
-  for (const row of (listRows ?? []) as { id:string }[]) {
-    const updated=await updateListInTransaction(tx,row.id,{ classId:null });
-    events.push(...updated.events);
-  }
+  const { rows:noteRows }=await tx.execute('SELECT id FROM notes WHERE class_id=? LIMIT 1',[id]);
+  if (noteRows?.length) throw new Error(`Cannot delete class ${id}: it still has member notes`);
+  const { rows:listRows }=await tx.execute('SELECT id FROM lists WHERE class_id=? LIMIT 1',[id]);
+  if (listRows?.length) throw new Error(`Cannot delete class ${id}: it still has member lists`);
   await tx.execute('DELETE FROM classes WHERE id=?',[id]);
-  events.push({ entityType:'class',entityId:id,mutation:'delete' });
-  return events;
+}
+
+export async function renameClassInTransaction(tx:OpSqliteExecutor,id:string,name:string):Promise<Class> {
+  const { rows }=await tx.execute('SELECT * FROM classes WHERE id=?',[id]);
+  if (!rows?.[0]) throw new Error(`Class not found: ${id}`);
+  const existing=toClass(rows[0] as unknown as ClassRow);
+  const klass:Class={ ...existing,name,rev:existing.rev+1,updatedAt:nowIso() };
+  await tx.execute('UPDATE classes SET name=?,rev=?,updated_at=? WHERE id=?',[klass.name,klass.rev,klass.updatedAt,id]);
+  return klass;
+}
+
+export async function renameClass(db: OpSqliteDb, id: string, name: string): Promise<Class> {
+  return runLocalOnlyTransaction(db, (tx) => renameClassInTransaction(tx, id, name));
 }
 
 export async function deleteClass(db: OpSqliteDb, id: string): Promise<void> {
-  await runLocalOperation(db,{ operationId:generateId(),request:{ action:'deleteClass',id },execute:async(tx)=>({
-    result:{ status:'deleted' },events:await deleteClassInTransaction(tx,id),
-  })});
+  await runLocalOnlyTransaction(db, async (tx) => {
+    await deleteClassInTransaction(tx, id);
+  });
 }
 
 export async function listClasses(db: OpSqliteDb): Promise<Class[]> {
