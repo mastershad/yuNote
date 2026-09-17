@@ -2067,28 +2067,63 @@ Inside `NotesScreen`, after the existing state declarations:
   });
 ```
 
-For each note card (both the root feed's note branch and the class-view list), replace the plain `Pressable` with an `Animated.View` wrapping a gesture-detector view driven by `drag.useDragForNote(item.note.id, measureOrigin, idToType)`, where `idToType` resolves an id to `'note' | 'class' | null` from the currently-rendered feed (root) or always `'note'` (class view, since only notes are ever listed there). Register each card's layout rect on `onLayout` via `drag.registerTarget(id, rect)` and unregister on unmount via a cleanup effect, matching `dropTargetRegistry`'s documented contract (Task 6).
+For each note card (both the root feed's note branch and the class-view list), replace the plain `Pressable` with an `Animated.View` wrapping a gesture-detector view driven by `drag.useDragForNote(item.note.id, measureOrigin, idToType)`, where `idToType` resolves an id to `'note' | 'class' | null` from the currently-rendered feed (root) or always `'note'` (class view, since only notes are ever listed there). Unregister on unmount via a cleanup effect, matching `dropTargetRegistry`'s documented contract (Task 6).
+
+**Coordinate space — register every target in window-absolute coordinates,
+not `onLayout`'s raw `event.nativeEvent.layout`.** `useDraggable`'s pan
+(Task 7) reports `event.absoluteX`/`absoluteY` — real window coordinates.
+`onLayout`'s `layout` is parent-relative and, inside a `FlatList`, doesn't
+track scroll offset. Registering raw `layout` values against a
+window-absolute hit-test point means `dropTargetRegistry.hitTest` will
+silently miss or hit the wrong target as soon as any header/scroll offset
+exists — i.e. in essentially all real usage. Use a ref + `measureInWindow`
+for every `registerTarget` call site (note cards, root-feed `ClassCard`s,
+and both temporary zones below), the same pattern `measureOrigin` already
+needs for pickup-origin measurement:
+
+```ts
+const zoneRef = useRef<View>(null);
+// ...
+onLayout={() => {
+  zoneRef.current?.measureInWindow((x, y, width, height) => {
+    drag.registerTarget('delete-zone', { x, y, width, height });
+  });
+}}
+```
 
 Add the two temporary targets, rendered only when `drag.draggingId !== null`:
 
 ```tsx
 {drag.draggingId !== null ? (
   <View
+    ref={deleteZoneRef}
     testID="drag-delete-zone"
-    onLayout={(e) => drag.registerTarget('delete-zone', e.nativeEvent.layout)}
+    onLayout={() => {
+      deleteZoneRef.current?.measureInWindow((x, y, width, height) => {
+        drag.registerTarget('delete-zone', { x, y, width, height });
+      });
+    }}
     style={styles.deleteZone}>
     <Text style={styles.deleteZoneLabel}>🗑 Удалить</Text>
   </View>
 ) : null}
 {drag.draggingId !== null && screen.view === 'class' ? (
   <View
+    ref={allNotesZoneRef}
     testID="drag-all-notes-zone"
-    onLayout={(e) => drag.registerTarget('all-notes-zone', e.nativeEvent.layout)}
+    onLayout={() => {
+      allNotesZoneRef.current?.measureInWindow((x, y, width, height) => {
+        drag.registerTarget('all-notes-zone', { x, y, width, height });
+      });
+    }}
     style={styles.allNotesZone}>
     <Text style={styles.allNotesZoneLabel}>↑ Все заметки</Text>
   </View>
 ) : null}
 ```
+
+(`deleteZoneRef`/`allNotesZoneRef` are `useRef<View>(null)` declared inside
+`NotesScreen`, same pattern as `DraggableNoteCard`'s `cardRef`.)
 
 Add corresponding styles (`deleteZone`, `deleteZoneLabel`, `allNotesZone`, `allNotesZoneLabel`) to `makeStyles`, positioned per spec §6's diagram (bottom for delete, top for "All Notes", both fixed/absolute so they don't shift list layout when they appear).
 
