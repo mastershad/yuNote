@@ -1024,6 +1024,7 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 **Files:**
 - Modify: `cloud-platform/src/yunote/snapshot.ts`
 - Modify: `cloud-platform/src/yunote/snapshotStore.ts`
+- Modify: `cloud-platform/src/yunote/installationStore.ts`
 - Test: `cloud-platform/test/yunote/snapshot.test.ts`
 
 **Interfaces:**
@@ -1031,6 +1032,8 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 - Produces: `YunoteSnapshot` drops its `classes` field; `validateSnapshot`'s accepted key set and its `classId` cross-reference check both shrink to match; `readSnapshot`'s returned object no longer has a `classes` property.
 
 **Critically, this task must land before or together with Task 6** — `readSnapshot` currently queries `yunote_classes` directly, and it runs live during every enrollment request (`installationStore.ts` line 97, spec §8). If Task 6 drops the table before this task removes the query, enrollment breaks immediately on the next request, not eventually.
+
+**Found during execution, not in this task's original file list:** `installationStore.ts:98` reads `cloudSnapshot.classes.length` directly (as part of computing whether the cloud side has any data at all, before deciding whether to enforce a conflict check) — a second, real production call site this task's own type change breaks, missed by the original planning pass the same way `test/data/repositoryJournal.test.ts` was missed for Task 3. Fixed in Step 5 below. This is a one-line, purely mechanical fix (drop one clause from a boolean expression), not a design change — `installationStore.ts`'s own enrollment logic, hashing, and conflict-detection behavior are otherwise untouched.
 
 - [ ] **Step 1: Rewrite the test file**
 
@@ -1064,18 +1067,34 @@ In `src/yunote/snapshot.ts`:
 
 In `src/yunote/snapshotStore.ts`, delete the `const classes = db.prepare(...)` statement (lines 8-9) and remove `classes` from the returned object on line 20 (`return { schemaVersion:1, classes, notes, lists, listItems };` → `return { schemaVersion:1, notes, lists, listItems };`).
 
-- [ ] **Step 5: Run tests to verify they pass**
+- [ ] **Step 5: Fix `installationStore.ts`'s `cloudIsEmpty` check**
+
+In `src/yunote/installationStore.ts`, line 98 currently reads:
+
+```ts
+const cloudIsEmpty=cloudSnapshot.classes.length===0&&cloudSnapshot.notes.length===0&&cloudSnapshot.lists.length===0&&cloudSnapshot.listItems.length===0;
+```
+
+Change to:
+
+```ts
+const cloudIsEmpty=cloudSnapshot.notes.length===0&&cloudSnapshot.lists.length===0&&cloudSnapshot.listItems.length===0;
+```
+
+Nothing else on this line, or in this file, needs to change — `cloudHash` (line 99) is computed by hashing `cloudSnapshot` as a whole, so once `readSnapshot`'s return shape no longer has `classes` (Step 4), that hash automatically reflects the new shape without its own edit.
+
+- [ ] **Step 6: Run tests to verify they pass**
 
 Run: `npx jest test/yunote/snapshot.test.ts`
 Expected: PASS — all remaining tests (one fewer than before, since Step 1 deleted one entirely).
 
 Run: `npx jest` (full cloud-platform suite) and `npx tsc --noEmit`
-Expected: PASS — this also re-confirms Tasks 4-6's tests still pass together with this one, since `installationStore.ts`'s enrollment-conflict check (spec §8) depends on `readSnapshot`'s shape matching what enrollment tests expect.
+Expected: PASS — this also re-confirms Tasks 4-6's tests still pass together with this one, since `installationStore.ts`'s enrollment-conflict check (spec §8) depends on `readSnapshot`'s shape matching what enrollment tests expect. `tsc --noEmit` in particular must go from failing (16 suites, one compile error each, all at `installationStore.ts:98`) to clean.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add src/yunote/snapshot.ts src/yunote/snapshotStore.ts test/yunote/snapshot.test.ts
+git add src/yunote/snapshot.ts src/yunote/snapshotStore.ts src/yunote/installationStore.ts test/yunote/snapshot.test.ts
 git commit -m "fix(yunote): remove classes from the snapshot schema
 
 readSnapshot ran live on every device enrollment (installationStore.ts)
@@ -1084,6 +1103,11 @@ to detect cloud-vs-local conflicts -- with yunote_classes dropped
 request. Classes leave the snapshot schema entirely on the server
 side, matching the rest of this fix: they never reach another device,
 full stop, not just via the incremental journal path.
+installationStore.ts's own cloudIsEmpty check read cloudSnapshot.classes
+directly and needed the same one-line fix, found only once the type
+change actually broke compilation -- missed by this plan's original
+file survey the same way test/data/repositoryJournal.test.ts was
+missed for Task 3.
 
 Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 ```
