@@ -273,19 +273,27 @@ function migrateYunoteDropClassSync(db: Database.Database): void {
     db.exec('DROP TABLE yunote_list_organization_old');
 
     db.exec('DROP TABLE yunote_classes');
+
+    // No existing migration in this codebase verifies FK integrity after a
+    // structural change -- added specifically here because this migration
+    // recreates two FK-bearing tables under foreign_keys=ON, and a silent
+    // dangling reference would only surface later as an opaque write
+    // failure on an unrelated note/list update. New precedent, not an
+    // established one. Run and checked INSIDE the transaction, as the
+    // last statement, so a violation triggers an automatic ROLLBACK --
+    // the migration either fully applies with a verified-clean schema, or
+    // it leaves the database completely untouched and retryable on the
+    // next boot. Checking this AFTER the transaction commits would be
+    // strictly worse: a violation would already be permanent, and the
+    // tableExists guard above would then treat the (broken) migration as
+    // already applied on every subsequent boot, silently swallowing the
+    // failure forever instead of surfacing it again.
+    const violations = db.pragma('foreign_key_check') as unknown[];
+    if (violations.length > 0) {
+      throw new Error(`Post-migration foreign key check found ${violations.length} violation(s)`);
+    }
   });
   migrate();
-
-  // No existing migration in this codebase verifies FK integrity after a
-  // structural change -- adding it here specifically because this
-  // migration recreates two FK-bearing tables under foreign_keys=ON and a
-  // silent dangling reference would only surface later, as an opaque
-  // write failure on some unrelated note/list update. New precedent, not
-  // an established one.
-  const violations = db.pragma('foreign_key_check') as unknown[];
-  if (violations.length > 0) {
-    throw new Error(`Post-migration foreign key check found ${violations.length} violation(s)`);
-  }
 }
 ```
 
