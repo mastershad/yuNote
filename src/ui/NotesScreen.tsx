@@ -224,7 +224,11 @@ function formatDate(iso: string): string {
 // purely plumbing around it.
 function DropTargetLayout(props: { id: string; drag: ReturnType<typeof useNoteDrag>; children: React.ReactNode }) {
   const viewRef = useRef<View>(null);
-  useEffect(() => () => props.drag.unregisterTarget(props.id), [props.drag, props.id]);
+  // Depend on the stable unregisterTarget reference (useCallback'd inside
+  // useNoteDrag), not the whole drag object -- drag is a fresh object every
+  // render, which made this cleanup fire (and silently wipe the
+  // registration) on every unrelated re-render, not just real unmounts.
+  useEffect(() => () => props.drag.unregisterTarget(props.id), [props.drag.unregisterTarget, props.id]);
   return (
     <View
       ref={viewRef}
@@ -254,7 +258,10 @@ function DraggableNoteCard(props: {
   const originRef = useRef<Rect>(EMPTY_RECT);
   const cardRef = useRef<View>(null);
 
-  useEffect(() => () => drag.unregisterTarget(note.id), [drag, note.id]);
+  // Same reasoning as DropTargetLayout above: depend on the stable
+  // unregisterTarget reference, not the whole (fresh-every-render) drag
+  // object.
+  useEffect(() => () => drag.unregisterTarget(note.id), [drag.unregisterTarget, note.id]);
 
   const gesture = drag.useDragForNote(note.id, () => originRef.current, idToType);
   const isDragging = drag.draggingId === note.id;
