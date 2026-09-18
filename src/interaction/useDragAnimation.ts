@@ -6,9 +6,21 @@ export function useDragAnimation() {
   const scale = useRef(new Animated.Value(1)).current;
   const opacity = useRef(new Animated.Value(1)).current;
 
+  // useNativeDriver is deliberately OFF on every animation here (not the
+  // library's usual default) -- with it on, a native-driven Animated.timing
+  // updating props on a View that GestureDetector also wraps hits a Fabric
+  // assertion failure (SurfaceMountingManager.overridePropsReadableMap)
+  // under the New Architecture, crashing the app on every pickup. Confirmed
+  // via on-device reproduction: a plain long-press-hold with zero movement
+  // reproduces it, isolating the cause to playPickUp's native-driven
+  // animation, not gesture recognition or movement. All animations here
+  // (including position, since it shares the same style.transform array
+  // with scale -- mixing native- and JS-driven values across one transform
+  // triggers its own separate RN warning/crash) run on the JS thread
+  // instead.
   const playPickUp = () => {
-    Animated.timing(scale, { toValue: 0.94, duration: 150, useNativeDriver: true }).start();
-    Animated.timing(opacity, { toValue: 0.95, duration: 150, useNativeDriver: true }).start();
+    Animated.timing(scale, { toValue: 0.94, duration: 150, useNativeDriver: false }).start();
+    Animated.timing(opacity, { toValue: 0.95, duration: 150, useNativeDriver: false }).start();
   };
 
   const playMove = (point: { x: number; y: number }) => {
@@ -18,18 +30,18 @@ export function useDragAnimation() {
   const playDropSuccess = (target: { x: number; y: number }): Promise<void> =>
     new Promise((resolve) => {
       Animated.parallel([
-        Animated.spring(position, { toValue: target, useNativeDriver: true }),
-        Animated.timing(scale, { toValue: 0, duration: 220, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 0, duration: 220, useNativeDriver: true }),
+        Animated.spring(position, { toValue: target, useNativeDriver: false }),
+        Animated.timing(scale, { toValue: 0, duration: 220, useNativeDriver: false }),
+        Animated.timing(opacity, { toValue: 0, duration: 220, useNativeDriver: false }),
       ]).start(() => resolve());
     });
 
   const playCancel = (): Promise<void> =>
     new Promise((resolve) => {
       Animated.parallel([
-        Animated.spring(position, { toValue: { x: 0, y: 0 }, useNativeDriver: true }),
-        Animated.spring(scale, { toValue: 1, useNativeDriver: true }),
-        Animated.timing(opacity, { toValue: 1, duration: 150, useNativeDriver: true }),
+        Animated.spring(position, { toValue: { x: 0, y: 0 }, useNativeDriver: false }),
+        Animated.spring(scale, { toValue: 1, useNativeDriver: false }),
+        Animated.timing(opacity, { toValue: 1, duration: 150, useNativeDriver: false }),
       ]).start(() => resolve());
     });
 
