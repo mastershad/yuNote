@@ -78,6 +78,20 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
 
     namespace "com.yunote.app"
+
+    // Windows CMake path-length fix (same class of issue documented in the
+    // sibling IoT-Key-Fob-Project repo's docs/known-development-issues.md
+    // §4, "First occurrence (M3)"): react-native-gesture-handler's codegen
+    // output, compiled as part of THIS app module's own CMake build, pushes
+    // object-file paths past Windows' ~260-char limit from this repo's
+    // checkout depth. Relocating the app module's own build staging
+    // directory to a short path fixes it.
+    externalNativeBuild {
+        cmake {
+            buildStagingDirectory "C:/rncxx/yunote"
+        }
+    }
+
     defaultConfig {
         applicationId "com.yunote.app"
         minSdkVersion rootProject.ext.minSdkVersion
