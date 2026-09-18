@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import type { OpSqliteDb } from '../db/connection';
 import { createDropTargetRegistry, type Rect } from './dropTargetRegistry';
 import { useDraggable } from './useDraggable';
@@ -68,8 +68,23 @@ export function useNoteDrag(context: {
     deleteNote: (noteId) => context.notesStore.getState().deleteNote(noteId),
   };
 
-  function registerTarget(id: string, rect: Rect) { registry.register(id, rect); }
-  function unregisterTarget(id: string) { registry.unregister(id); }
+  // Stable identity across renders matters here, not just as a
+  // micro-optimization: useNoteDrag returns a fresh object every render
+  // (it has no reason not to -- draggingId/hoveredTargetId are real state),
+  // so a caller's cleanup effect that depends on the WHOLE returned object
+  // (or on a fresh-every-render function pulled off it) re-fires its
+  // cleanup on every unrelated re-render, not just on real unmount/id
+  // changes. That silently unregistered every drop target the moment any
+  // drag-related state changed (e.g. onPickUp's setDraggingId), and
+  // registerTarget never re-ran to fix it (onLayout only fires on a real
+  // layout change) -- found via on-device testing: hitTest kept returning
+  // null for a point that was mathematically inside a target's rect logged
+  // moments earlier. registry itself never changes (useRef), so these have
+  // no real dependencies -- useCallback(_, []) gives them permanent
+  // identity, which is what callers must depend on instead of the whole
+  // hook return value.
+  const registerTarget = useCallback((id: string, rect: Rect) => { registry.register(id, rect); }, [registry]);
+  const unregisterTarget = useCallback((id: string) => { registry.unregister(id); }, [registry]);
 
   function targetTypeFor(id: string): TargetType {
     if (id === 'delete-zone') return 'delete';
@@ -85,19 +100,25 @@ export function useNoteDrag(context: {
   function useDragForNote(noteId: string, measureOrigin: () => Rect, idToType: (id: string) => TargetType) {
     return useDraggable(noteId, measureOrigin, {
       onPickUp: () => { setDraggingId(noteId); feedback.pickup(); animation.playPickUp(); },
-      onMove: (_id, point) => {
-        animation.playMove(point);
+      onMove: (_id, point, translation) => {
+        // point (window-absolute) drives hit-testing against
+        // dropTargetRegistry's window-absolute rects; translation (RNGH's
+        // own gesture-start-relative delta) drives the card's own
+        // transform -- translateX/Y offsets a view from ITS layout
+        // position, not from the window origin, so feeding it the
+        // absolute point made the card jump away from the finger.
+        animation.playMove(translation);
         const hit = registry.hitTest(point);
         if (hit !== null && hit !== lastHoveredRef.current) feedback.targetEntered();
         lastHoveredRef.current = hit;
         setHoveredTargetId(hit);
       },
-      onDrop: async (_id, point) => {
+      onDrop: async (_id, point, translation) => {
         const targetId = registry.hitTest(point);
         const targetType = targetId ? (idToType(targetId) ?? targetTypeFor(targetId)) : null;
         if (targetId && targetType) {
           if (targetType === 'delete') feedback.deleteSuccess(); else feedback.dropSuccess();
-          await animation.playDropSuccess(point);
+          await animation.playDropSuccess(translation);
           await resolveDrop({ screen: context.screen, draggedId: noteId, targetId, targetType }, fns);
         } else {
           await animation.playCancel();

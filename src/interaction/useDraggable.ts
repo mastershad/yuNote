@@ -3,8 +3,16 @@ import type { Rect } from './dropTargetRegistry';
 
 export interface DraggableCallbacks {
   onPickUp(id: string, origin: Rect): void;
-  onMove(id: string, point: { x: number; y: number }): void;
-  onDrop(id: string, point: { x: number; y: number }): void;
+  // `point` is window-absolute (for hit-testing against dropTargetRegistry's
+  // window-absolute rects); `translation` is RNGH's own gesture-start-
+  // relative delta (event.translationX/Y) -- the value a transform-based
+  // drag needs, since translateX/Y offsets a view from its OWN layout
+  // position, not from the window origin. Passing the absolute point where
+  // a translation was needed made the dragged card jump toward the
+  // window's top-left by roughly the card's own on-screen offset -- found
+  // via on-device testing (the card visibly flew away from the finger).
+  onMove(id: string, point: { x: number; y: number }, translation: { x: number; y: number }): void;
+  onDrop(id: string, point: { x: number; y: number }, translation: { x: number; y: number }): void;
   onCancel(id: string): void;
 }
 
@@ -19,10 +27,20 @@ export function useDraggable(id: string, measureOrigin: () => Rect, callbacks: D
 
   const pan = Gesture.Pan()
     .onUpdate((event) => {
-      callbacks.onMove(id, { x: event.absoluteX, y: event.absoluteY });
+      callbacks.onMove(
+        id,
+        { x: event.absoluteX, y: event.absoluteY },
+        { x: event.translationX, y: event.translationY },
+      );
     })
     .onEnd((event, success) => {
-      if (success) callbacks.onDrop(id, { x: event.absoluteX, y: event.absoluteY });
+      if (success) {
+        callbacks.onDrop(
+          id,
+          { x: event.absoluteX, y: event.absoluteY },
+          { x: event.translationX, y: event.translationY },
+        );
+      }
     })
     .onFinalize((_event, success) => {
       if (!success) callbacks.onCancel(id);
