@@ -149,13 +149,37 @@ during naming, the two notes' `class_id` values are reverted and the
 just-created `classes` row is deleted — no orphaned unnamed class survives
 a cancel, per the explicit requirement.
 
-**Swipe-right delete with undo (§11).** A `Swipeable`-style pan gesture on
-each list item reveals a delete-zone; crossing a distance threshold on
-release deletes the row from SQLite immediately (not soft-deleted — see
-§8 below for why) and shows an undo toast holding the deleted row's full
-data in memory for a few seconds. Tapping undo re-inserts it via the same
-`createListItem` repository function used for a normal add — undo is not
-a special code path, it's a normal create using remembered data.
+**Swipe-right delete with undo (§11).** Superseded during implementation
+(2026-09-21): the original reveal-a-delete-zone pattern below was judged
+too heavy for individual list items once built (still considered right
+for whole lists/cards, which use the separate drag-to-drop-zone gesture
+in §5's note-drag design) and was replaced with a plain
+`Gesture.Pan()`-driven threshold (`src/interaction/useSwipeToDelete.ts`):
+crossing ~40% of the row's width on a rightward swipe animates the row
+out and deletes it from SQLite immediately (still hard-deleted, not
+soft-deleted — see §8 below for why), with no intermediate
+reveal-the-zone step. An undo banner (`src/ui/usePendingItemUndo.ts`)
+then shows for 4 seconds; tapping undo re-inserts the item via the same
+`addItem` repository call used for a normal add. Accepted simplifications
+from that reuse: the restored item gets a new id, is appended at the end
+of the list (item order is `created_at ASC`), and loses its
+checked/completion state. The undo banner is single-slot — swiping a
+second item before the first one's window elapses silently replaces the
+banner, and the first item's undo opportunity is gone. Both trade-offs
+were confirmed with the product owner rather than assumed.
+
+<details>
+<summary>Original design (not implemented)</summary>
+
+A `Swipeable`-style pan gesture on each list item reveals a delete-zone;
+crossing a distance threshold on release deletes the row from SQLite
+immediately (not soft-deleted — see §8 below for why) and shows an undo
+toast holding the deleted row's full data in memory for a few seconds.
+Tapping undo re-inserts it via the same `createListItem` repository
+function used for a normal add — undo is not a special code path, it's a
+normal create using remembered data.
+
+</details>
 
 ## 6. Schema migrations
 

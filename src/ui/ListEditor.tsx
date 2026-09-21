@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Modal,
   Pressable,
   ScrollView,
@@ -11,10 +12,13 @@ import {
   View,
   Image,
 } from 'react-native';
+import { GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import type { List, ListItem } from '../data/lists';
 
 const EMPTY_ITEMS: ListItem[] = [];
 import { createListsStore } from '../state/listsStore';
+import { useSwipeToDelete } from '../interaction/useSwipeToDelete';
+import { usePendingItemUndo } from './usePendingItemUndo';
 import { InlineError } from './components';
 import type { ThemePalette } from './theme';
 
@@ -29,8 +33,26 @@ export function ListEditor(props: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const styles = useMemo(() => makeStyles(props.palette), [props.palette]);
+  // Called before the props.list-null early return below, so it must live
+  // here rather than after it -- a hook can't be called conditionally.
+  // Safe to assume props.list is non-null inside restore: the undo banner
+  // that triggers it only ever renders in the branch below where list is
+  // known non-null, and the effect below dismisses any pending undo the
+  // instant props.list changes to a different list (or to null), before
+  // this callback could ever fire against the wrong list.
+  const pendingUndo = usePendingItemUndo((restoredText) =>
+    props.store.getState().addItem(props.list!.id, restoredText).catch(restoreError => {
+      setError(restoreError instanceof Error ? restoreError.message : 'Не удалось отменить удаление');
+    }),
+  );
 
   useEffect(() => {
+    // ListEditor stays mounted across list switches (ListsScreen just
+    // toggles props.list, it doesn't unmount/remount this component), so a
+    // pending undo from the previously open list must not survive into a
+    // different one -- otherwise tapping "Отменить" here would restore the
+    // old list's item into whichever list happens to be open now.
+    pendingUndo.dismiss();
     if (props.list) {
       setText('');
       setError('');
@@ -62,13 +84,12 @@ export function ListEditor(props: {
     }
   };
 
-  const remove = async (itemId: string) => {
+  const commitSwipeDelete = (item: ListItem) => {
     setError('');
-    try {
-      await props.store.getState().removeItem(list.id, itemId);
-    } catch (removeError) {
+    props.store.getState().removeItem(list.id, item.id).catch(removeError => {
       setError(removeError instanceof Error ? removeError.message : 'Не удалось удалить пункт');
-    }
+    });
+    pendingUndo.show({ itemId: item.id, text: item.text });
   };
 
   const confirmDelete = () => {
@@ -92,7 +113,10 @@ export function ListEditor(props: {
 
   return (
     <Modal visible animationType="slide" presentationStyle="pageSheet" onRequestClose={props.onClose}>
-      <View style={styles.safe}>
+      {/* react-native-gesture-handler requires its own root inside a Modal on
+          Android -- the Modal mounts in a separate native window, so the
+          app-level GestureHandlerRootView in App.tsx doesn't cover it. */}
+      <GestureHandlerRootView style={styles.safe}>
         <View style={styles.topBar}>
           <Pressable onPress={props.onClose} hitSlop={12}><Text style={styles.back}>Закрыть</Text></Pressable>
           <Text style={styles.heading} numberOfLines={1}>{list.title}</Text>
@@ -117,29 +141,67 @@ export function ListEditor(props: {
         <ScrollView contentContainerStyle={styles.items} keyboardShouldPersistTaps="handled">
           {items.length === 0 ? <Text style={styles.empty}>Добавьте первый пункт списка.</Text> : null}
           {items.map(item => (
-            <View key={item.id} style={styles.item}>
-              {list.sharingMode==='shared'&&item.checked?(
-                <View testID={`completion-avatar-${item.id}`} accessibilityLabel={`Выполнил: ${item.completedByDisplayName??item.completedByPublicClientId}`} style={styles.completionAvatar}>
-                  {item.completedByAvatarDataUri?<Image source={{uri:item.completedByAvatarDataUri}} style={styles.completionImage}/>:<Text style={styles.completionInitials}>{initials(item.completedByDisplayName??item.completedByPublicClientId??'')}</Text>}
-                </View>
-              ):(<Pressable
-                testID={`toggle-item-${item.id}`}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: item.checked }}
-                disabled={!canEdit}
-                onPress={() => canEdit&&void props.store.getState().toggleItem(list.id, item.id)}
-                style={[styles.checkbox, item.checked && styles.checkboxChecked]}>
-                {item.checked ? <Text style={styles.check}>✓</Text> : null}
-              </Pressable>)}
-              <Text style={[styles.itemText, item.checked && styles.itemDone]}>{item.text}</Text>
-              {canEdit?<Pressable testID={`remove-item-${item.id}`} onPress={() => void remove(item.id)} hitSlop={12}>
-                <Text style={styles.remove}>×</Text>
-              </Pressable>:null}
-            </View>
+            <ListItemRow
+              key={item.id}
+              item={item}
+              sharingMode={list.sharingMode}
+              canEdit={canEdit}
+              styles={styles}
+              onToggle={() => void props.store.getState().toggleItem(list.id, item.id)}
+              onSwipeDelete={() => commitSwipeDelete(item)}
+            />
           ))}
         </ScrollView>
-      </View>
+        {pendingUndo.pending ? (
+          <View style={styles.undoBanner}>
+            <Text style={styles.undoText}>Пункт удалён</Text>
+            <Pressable testID="undo-remove-item" onPress={pendingUndo.confirmUndo} hitSlop={12}>
+              <Text style={styles.undoAction}>Отменить</Text>
+            </Pressable>
+          </View>
+        ) : null}
+      </GestureHandlerRootView>
     </Modal>
+  );
+}
+
+// Swipe-to-delete lives on its own component (rather than inline in the
+// .map() above) because useSwipeToDelete calls hooks -- each row needs an
+// isolated hook-call sequence that doesn't shift when the item count
+// changes, same reasoning as NotesScreen's DraggableNoteCard.
+function ListItemRow(props: {
+  item: ListItem;
+  sharingMode: List['sharingMode'];
+  canEdit: boolean;
+  styles: ReturnType<typeof makeStyles>;
+  onToggle(): void;
+  onSwipeDelete(): void;
+}) {
+  const { item, sharingMode, canEdit, styles } = props;
+  const [rowWidth, setRowWidth] = useState(0);
+  const swipe = useSwipeToDelete(rowWidth, { enabled: canEdit, onCommit: props.onSwipeDelete });
+
+  return (
+    <GestureDetector gesture={swipe.gesture}>
+      <Animated.View
+        style={[styles.item, swipe.style]}
+        onLayout={(event) => setRowWidth(event.nativeEvent.layout.width)}>
+        {sharingMode==='shared'&&item.checked?(
+          <View testID={`completion-avatar-${item.id}`} accessibilityLabel={`Выполнил: ${item.completedByDisplayName??item.completedByPublicClientId}`} style={styles.completionAvatar}>
+            {item.completedByAvatarDataUri?<Image source={{uri:item.completedByAvatarDataUri}} style={styles.completionImage}/>:<Text style={styles.completionInitials}>{initials(item.completedByDisplayName??item.completedByPublicClientId??'')}</Text>}
+          </View>
+        ):(<Pressable
+          testID={`toggle-item-${item.id}`}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: item.checked }}
+          disabled={!canEdit}
+          onPress={() => canEdit && props.onToggle()}
+          style={[styles.checkbox, item.checked && styles.checkboxChecked]}>
+          {item.checked ? <Text style={styles.check}>✓</Text> : null}
+        </Pressable>)}
+        <Text style={[styles.itemText, item.checked && styles.itemDone]}>{item.text}</Text>
+      </Animated.View>
+    </GestureDetector>
   );
 }
 
@@ -171,7 +233,9 @@ function makeStyles(p: ThemePalette) {
     check: { color: p.onAccent, fontWeight: '900' },
     itemText: { flex: 1, color: p.text, fontSize: 17, paddingVertical: 14 },
     itemDone: { color: p.mutedText, textDecorationLine: 'line-through' },
-    remove: { color: p.mutedText, fontSize: 27, fontWeight: '500' },
+    undoBanner: { minHeight: 50, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 18, marginBottom: 18, borderRadius: 16, backgroundColor: p.surface, borderWidth: 1, borderColor: p.border },
+    undoText: { color: p.text, fontSize: 15 },
+    undoAction: { color: p.accent, fontSize: 15, fontWeight: '800' },
   });
 }
 

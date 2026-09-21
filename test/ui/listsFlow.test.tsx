@@ -67,7 +67,7 @@ describe('ListsScreen', () => {
     await act(async () => tree.unmount());
   });
 
-  it('adds, toggles, removes an item and confirms list deletion', async () => {
+  it('adds and toggles an item, confirms list deletion, and has no leftover "x" remove button', async () => {
     const model = listsStore([list], [item]);
     jest.spyOn(Alert, 'alert').mockImplementation((_title, _message, buttons) => {
       buttons?.find(button => button.style === 'destructive')?.onPress?.();
@@ -83,9 +83,15 @@ describe('ListsScreen', () => {
     expect(model.addItem).toHaveBeenCalledWith('l1', 'Хлеб');
 
     await act(async () => tree.root.findByProps({ testID: 'toggle-item-i1' }).props.onPress());
-    await act(async () => tree.root.findByProps({ testID: 'remove-item-i1' }).props.onPress());
     expect(model.toggleItem).toHaveBeenCalledWith('l1', 'i1');
-    expect(model.removeItem).toHaveBeenCalledWith('l1', 'i1');
+
+    // Item removal is swipe-only now (superseding the old "x" button) --
+    // real gesture recognition isn't simulated here, same convention as
+    // useDraggable/useNoteDrag's drag gestures elsewhere in this repo
+    // (verified manually on-device instead). The threshold decision
+    // (shouldCommitSwipe) and the resulting undo-banner timer logic
+    // (usePendingItemUndo) are unit tested directly without a gesture.
+    expect(() => tree.root.findByProps({ testID: 'remove-item-i1' })).toThrow();
 
     await act(async () => tree.root.findByProps({ testID: 'delete-list' }).props.onPress());
     expect(model.deleteList).toHaveBeenCalledWith('l1');
